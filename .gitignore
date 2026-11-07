@@ -1,0 +1,4 @@
+# 個人の好みと視聴履歴は公開しない
+prefs.md
+data/
+__pycache__/
