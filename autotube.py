@@ -11,6 +11,7 @@
 優先順位: 今回の希望 ＞ 好みメモ・評価・履歴（希望の範囲内で迷ったときの参考）
 
 mpv のキー: n=次へ  q=終了  g=👍  b=👎
+（Web 画面から操作したいときは web.py を使う）
 """
 import argparse
 import json
@@ -30,10 +31,20 @@ INPUT_CONF = BASE / "mpv-input.conf"
 
 N_PER_QUERY = 15
 MIN_SEC, MAX_SEC = 120, 10 * 3600  # ショートと極端に長いものを除く
-YTDL_FORMAT = "bestvideo[height<=1080][vcodec^=avc1]+bestaudio/best[height<=1080]/best"
+# HLS（m3u8）を優先する。通常の DASH 形式は mpv(ffmpeg) が直接取りに行くと 403 で拒否されることがある
+def ytdl_format(max_h=1080):
+    return (f"bv[protocol^=m3u8][height<={max_h}][vcodec^=avc1]+ba[protocol^=m3u8]"
+            f"/b[protocol^=m3u8][height<={max_h}]"
+            f"/bv[height<={max_h}][vcodec^=avc1]+ba/b[height<={max_h}]/b")
+
+
+YTDL_FORMAT = ytdl_format(1080)
+SEARCH_URL = "https://www.youtube.com/results?search_query="
 LIVE_FILTER = "EgJAAQ%3D%3D"  # YouTube 検索の「ライブ」絞り込み
+DATE_SORT = "CAI%3D"          # YouTube 検索の「アップロード日（新しい順）」
 CLAUDE_MODEL = os.environ.get("AUTOTUBE_MODEL", "haiku")
 QUIT_STOP = 4  # mpv-input.conf の q
+IS_WSL = bool(os.environ.get("WSL_DISTRO_NAME"))
 
 
 def log(msg):
@@ -58,6 +69,12 @@ def append_history(rec):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+def ensure_prefs():
+    DATA.mkdir(exist_ok=True)
+    if not PREFS.exists() and (BASE / "prefs.example.md").exists():
+        shutil.copy(BASE / "prefs.example.md", PREFS)  # 好みメモは個人用なので git 管理外
+
+
 def ask_claude(prompt):
     """claude -p に聞いて、返事の中の JSON を取り出す"""
     r = subprocess.run(
@@ -74,7 +91,7 @@ def ask_claude(prompt):
 
 
 def make_queries(request):
-    """希望から YouTube の検索ワードを考えてもらう"""
+    """希望から YouTube の検索ワードを考えてもらう。戻り値 (検索ワード, ライブ希望か)"""
     obj = ask_claude(f"""次の希望に合う YouTube 動画を探すための検索ワードを3個考えてください。
 同じような動画ばかりにならないよう、切り口を変えてください（例：解説・実況・ドキュメンタリー・講座など）。
 希望の内容から外れないことが最優先です。
@@ -92,15 +109,19 @@ def make_queries(request):
     return qs[:3] or [request], obj.get("live") is True
 
 
-def search(query, live=False):
-    if live:  # 配信中のものだけ
-        target = ["https://www.youtube.com/results?search_query="
-                  + urllib.parse.quote_plus(query) + "&sp=" + LIVE_FILTER,
-                  "--playlist-end", str(N_PER_QUERY)]
+def search(query, live=False, long=False, newest=False):
+    """YouTube を検索する。
+    live=True: 配信中のライブだけ / long=True: 10 時間超も含める / newest=True: 新しい順"""
+    q = urllib.parse.quote_plus(query)
+    if live:
+        target = [SEARCH_URL + q + "&sp=" + LIVE_FILTER, "--playlist-end", str(N_PER_QUERY)]
+    elif newest:
+        target = [SEARCH_URL + q + "&sp=" + DATE_SORT, "--playlist-end", str(N_PER_QUERY)]
     else:
         target = [f"ytsearch{N_PER_QUERY}:{query}"]
     r = subprocess.run(
-        ["yt-dlp", "--flat-playlist", "-J", *target],
+        ["yt-dlp", "--extractor-args", "youtube:lang=ja",  # 付けないとタイトルが英訳されることがある
+         "--flat-playlist", "-J", *target],
         capture_output=True, text=True, timeout=120,
     )
     if r.returncode != 0:
@@ -109,7 +130,26 @@ def search(query, live=False):
     if live:
         return [e for e in entries if e.get("id") and e.get("live_status") == "is_live"]
     return [e for e in entries if e.get("id") and e.get("duration")
-            and MIN_SEC <= e["duration"] <= MAX_SEC]
+            and MIN_SEC <= e["duration"] and (long or e["duration"] <= MAX_SEC)]
+
+
+def gather(queries, *, normal=True, live=False, long=False, newest=False, exclude=()):
+    """検索ワードごとに検索して、候補をまとめる（exclude の id と重複は除く）"""
+    cands, ids = [], set(exclude)
+    modes = ([False] if normal else []) + ([True] if live else [])
+    for q in queries:
+        for is_live in modes:
+            log(f"「{q}」を検索中…" + ("（ライブ）" if is_live else ""))
+            try:
+                found = search(q, live=is_live, long=long, newest=newest)
+            except (RuntimeError, subprocess.TimeoutExpired) as e:
+                log(str(e))
+                continue
+            for c in found:
+                if c["id"] not in ids:
+                    ids.add(c["id"])
+                    cands.append(c)
+    return cands
 
 
 def fmt_dur(sec):
@@ -119,23 +159,26 @@ def fmt_dur(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def choose(request, candidates, history):
-    """Claude に1本選ばせる。戻り値 (候補, 理由)"""
+def choose(request, candidates, history, n=1, newest=False):
+    """Claude に n 本選ばせる（再生する順）。戻り値 [(候補, 理由), ...]"""
+    n = min(n, len(candidates))
     recent = [h for h in history if h.get("event") == "played"][-10:]
     rated = [h for h in history if h.get("event") in ("good", "bad")][-30:]
-    lines = [f"{i}. {c['title']} ／ {c.get('channel') or '?'} ／ {fmt_dur(c['duration'])}"
+    lines = [f"{i}. {c['title']} ／ {c.get('channel') or '?'} ／ {fmt_dur(c.get('duration'))}"
              f" ／ {c.get('view_count') or '?'}回"
              for i, c in enumerate(candidates)]
-    obj = ask_claude(f"""YouTube の動画を1本選んでください。テレビで流しっぱなしにして観ます。
+    newest_rule = ("\n4. 新しい動画を優先する（候補は検索ワードごとに新しい順に並んでいる）"
+                   if newest else "")
+    obj = ask_claude(f"""YouTube の動画を{n}本選んでください。テレビで流しっぱなしにして、選んだ順に観ます。
 
 # 今回の希望（最優先）
 {request}
 
 # 選び方
-1. 今回の希望に一番合うものを選ぶ。これが最優先
+1. 今回の希望に合うものを選ぶ。これが最優先
 2. 好みメモ・評価・最近観た動画は「参考」。希望に合う候補の中で迷ったときだけ使う
    （ユーザーはいつもと毛色の違う動画も観たいので、過去の傾向に寄せすぎない）
-3. 最近観た動画と似すぎるもの（同じチャンネルが続く・同じ内容）は避ける
+3. 最近観た動画や、選んだ動画どうしで似すぎるもの（同じチャンネルが続く・同じ内容）は避ける{newest_rule}
 
 # 参考：好みメモ
 {PREFS.read_text() if PREFS.exists() else '(なし)'}
@@ -149,51 +192,61 @@ def choose(request, candidates, history):
 # 候補（番号. タイトル ／ チャンネル ／ 長さ ／ 再生数）
 {chr(10).join(lines)}
 
-次の JSON だけを1行で出力してください（説明文やコードブロックは不要）:
-{{"index": 候補の番号, "reason": "選んだ理由を日本語で短く"}}""")
-    try:
-        return candidates[int(obj["index"])], str(obj.get("reason", ""))
-    except (TypeError, ValueError, KeyError, IndexError):
+次の JSON だけを1行で出力してください（説明文やコードブロックは不要）。picks は観る順に{n}個:
+{{"picks": [{{"index": 候補の番号, "reason": "選んだ理由を日本語で短く"}}]}}""")
+    picks, used = [], set()
+    for p in (obj or {}).get("picks") or []:
+        try:
+            i = int(p["index"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if 0 <= i < len(candidates) and i not in used:
+            used.add(i)
+            picks.append((candidates[i], str(p.get("reason", ""))))
+    if not picks:
         log("選べなかったので先頭の候補にします")
-        return candidates[0], "(自動で先頭を選択)"
+        picks = [(c, "(自動で選択)") for c in candidates[:n]]
+    return picks[:n]
 
 
 def pick_next(request, queries, live):
     history = load_history()
     seen = {h["id"] for h in history if h.get("event") == "played"}
-    cands, ids = [], set()
-    for q in queries:
-        log(f"「{q}」を検索中…")
-        try:
-            found = search(q, live)
-        except (RuntimeError, subprocess.TimeoutExpired) as e:
-            log(str(e))
-            continue
-        for c in found:
-            if c["id"] not in seen and c["id"] not in ids:
-                ids.add(c["id"])
-                cands.append(c)
+    cands = gather(queries, normal=not live, live=live, exclude=seen)
     if not cands:
         raise RuntimeError("観ていない候補が見つかりませんでした")
     log(f"候補 {len(cands)} 本から Claude が選んでいます…")
-    return choose(request, cands, history)
+    return choose(request, cands, history)[0]
 
 
-def wayland_env():
+def mpv_env():
     env = os.environ.copy()
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     env.setdefault("WAYLAND_DISPLAY", "wayland-0")  # SSH や tmux から起動したとき用
     return env
 
 
+# WSLg 用の mpv オプション
+# - profile=fast: GPU を使わず CPU で描画するため、既定の拡大処理だとフレームの 6 割を捨てる
+# - force-render: 最小化して戻したことが mpv に伝わらず、描画を止めたままになる
+WSL_MPV_ARGS = ["--profile=fast", "--force-render"]
+
+
+def mpv_screen_args():
+    # WSLg では --fs だとウィンドウが画面外に置かれて見えないため、枠なしの画面サイズで代用する
+    if IS_WSL:
+        return [*WSL_MPV_ARGS, "--no-border", "--geometry=100%x100%+0+0"]
+    return ["--fs"]
+
+
 def play(video, request):
     """再生して、mpv の終了コードを返す。g/b の評価は履歴に記録"""
     url = f"https://www.youtube.com/watch?v={video['id']}"
-    cmd = ["mpv", "--fs", f"--ytdl-format={YTDL_FORMAT}",
+    cmd = ["mpv", *mpv_screen_args(), f"--ytdl-format={YTDL_FORMAT}",
            f"--input-conf={INPUT_CONF}", "--msg-level=all=no,cplayer=info",
            f"--force-media-title={video['title']}", url]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         text=True, env=wayland_env())
+                         text=True, env=mpv_env())
     for line in p.stdout:
         line = line.strip()
         if line.startswith("AUTOTUBE:"):
@@ -212,9 +265,7 @@ def main():
     ap.add_argument("--live", action="store_true", help="配信中のライブから探す")
     ap.add_argument("--dry-run", action="store_true", help="選ぶだけで再生しない")
     args = ap.parse_args()
-    DATA.mkdir(exist_ok=True)
-    if not PREFS.exists() and (BASE / "prefs.example.md").exists():
-        shutil.copy(BASE / "prefs.example.md", PREFS)  # 好みメモは個人用なので git 管理外
+    ensure_prefs()
     request = " ".join(args.request)
     log("検索ワードを考えています…")
     queries, live = make_queries(request)
@@ -223,7 +274,7 @@ def main():
 
     while True:
         video, reason = pick_next(request, queries, live)
-        log(f"▶ {video['title']} ／ {video.get('channel')} ／ {fmt_dur(video['duration'])}")
+        log(f"▶ {video['title']} ／ {video.get('channel')} ／ {fmt_dur(video.get('duration'))}")
         log(f"  理由: {reason}")
         if args.dry_run:
             return
