@@ -45,7 +45,7 @@
   .progress { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .bar { flex: 1; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; cursor: pointer; }
   .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .4s linear; }
-  .controls { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-top: 12px; }
+  .controls { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 12px; }
   button {
     font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
     border-radius: 10px; padding: 10px 6px; cursor: pointer; min-height: 44px;
@@ -90,6 +90,7 @@
   li .acts { display: grid; gap: 6px; }
   li .acts button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
   .live { color: var(--bad); font-weight: 600; }
+  .chmode { font-size: 13px; color: var(--accent); margin: -4px 0 10px; }
 
   @media (max-width: 480px) {
     .now { grid-template-columns: 1fr; }
@@ -122,6 +123,7 @@
       <button data-act="max" id="maxBtn" title="最大化の切り替え">⛶<small>最大化</small></button>
       <button data-act="rate" data-ev="good" title="好き">👍<small>好き</small></button>
       <button data-act="rate" data-ev="bad" title="いまいち">👎<small>いまいち</small></button>
+      <button data-act="channel" id="chBtn" title="気に入ったら：次の候補をこの動画のチャンネルから選ぶ">📺<small>このチャンネル</small></button>
     </div>
     <div class="volume">
       <button data-act="volume" data-delta="-5" title="音量を下げる">−</button>
@@ -156,6 +158,7 @@
         <button data-act="stop" title="再生を止める">停止</button>
       </div>
     </div>
+    <div id="chmode" class="chmode"></div>
     <ol id="queue"></ol>
     <div id="queueEmpty" class="empty">まだありません</div>
   </section>
@@ -217,6 +220,13 @@ function render(s) {
   $("maxBtn").querySelector("small").textContent = p.maximized ? "元に戻す" : "最大化";
   for (const b of document.querySelectorAll(".controls button")) b.disabled = !n || !p.running;
   $("optQ720").checked = s.q720;
+  const ch = s.channel;
+  $("chBtn").classList.toggle("on", !!ch);
+  $("chBtn").querySelector("small").textContent = ch ? "解除" : "このチャンネル";
+  $("chBtn").dataset.on = ch ? "0" : "1";
+  if (ch) $("chBtn").disabled = false;  // 停止中でも解除はできるように
+  $("chmode").textContent = ch ? `📺 チャンネル「${ch.name}」から選んでいます` : "";
+  $("chmode").style.display = ch ? "" : "none";
 
   if (!formTouched) {
     $("request").value = s.request;
@@ -253,6 +263,7 @@ document.addEventListener("click", (e) => {
   if (b.dataset.sec !== undefined) body.sec = Number(b.dataset.sec);
   if (b.dataset.ev !== undefined) body.ev = b.dataset.ev;
   if (b.dataset.delta !== undefined) body.delta = Number(b.dataset.delta);
+  if (b.dataset.on !== undefined) body.on = b.dataset.on === "1";
   api(b.dataset.act, body);
 });
 

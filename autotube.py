@@ -30,6 +30,7 @@ HISTORY = DATA / "history.jsonl"
 INPUT_CONF = BASE / "mpv-input.conf"
 
 N_PER_QUERY = 15
+CHANNEL_N = 40  # 「このチャンネル」モードで取る本数（最新分・チャンネル内検索それぞれ）
 MIN_SEC, MAX_SEC = 120, 10 * 3600  # ショートと極端に長いものを除く
 # HLS（m3u8）を優先する。通常の DASH 形式は mpv(ffmpeg) が直接取りに行くと 403 で拒否されることがある
 def ytdl_format(max_h=1080):
@@ -93,8 +94,11 @@ def ask_claude(prompt):
 def make_queries(request):
     """希望から YouTube の検索ワードを考えてもらう。戻り値 (検索ワード, ライブ希望か)"""
     obj = ask_claude(f"""次の希望に合う YouTube 動画を探すための検索ワードを3個考えてください。
-同じような動画ばかりにならないよう、切り口を変えてください（例：解説・実況・ドキュメンタリー・講座など）。
 希望の内容から外れないことが最優先です。
+- 曲名・作品名・人名など「特定のもの」を観たい希望なら、余計な言葉（解説・実況など）は足さない。
+  正しい表記（音声入力の聞き間違いや表記ゆれを直したもの）、英語や原題の表記、「演奏」「歌ってみた」など
+  そのものが観られる言葉で探す。
+- 分野やテーマの希望なら、同じような動画ばかりにならないよう切り口を変える（例：解説・実況・ドキュメンタリー・講座など）。
 
 # 希望
 {request}
@@ -105,8 +109,11 @@ def make_queries(request):
 次の JSON だけを1行で出力してください:
 {{"queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "live": true または false}}""")
     obj = obj or {}
-    qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()]
-    return qs[:3] or [request], obj.get("live") is True
+    qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()][:3]
+    # 希望そのものでも探す。YouTube は単独なら表記の間違いを補正してくれるが、言葉を足すと補正されず 0 件になる
+    if len(request) <= 40 and request not in qs:
+        qs.insert(0, request)
+    return qs or [request], obj.get("live") is True
 
 
 def search(query, live=False, long=False, newest=False):
@@ -152,6 +159,32 @@ def gather(queries, *, normal=True, live=False, long=False, newest=False, exclud
     return cands
 
 
+def channel_videos(channel_id, channel, queries=(), *, long=False, exclude=()):
+    """チャンネルの動画を集める：新しい順の最新分＋チャンネル内で検索ワードを検索した結果"""
+    base = f"https://www.youtube.com/channel/{channel_id}"
+    targets = [(base + "/videos", "")] + [(base + "/search?query=" + urllib.parse.quote_plus(q), f"（{q}）")
+                                          for q in queries]
+    cands, ids = [], set(exclude)
+    for url, note in targets:
+        log(f"チャンネル「{channel}」の動画を取得中…{note}")
+        r = subprocess.run(
+            ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--flat-playlist", "-J",
+             "--playlist-end", str(CHANNEL_N), url],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode != 0:
+            log(f"チャンネルの取得に失敗: {r.stderr.strip()[-300:]}")
+            continue
+        for e in json.loads(r.stdout).get("entries") or []:
+            d = e.get("duration")
+            if not e.get("id") or e["id"] in ids or not d or d < MIN_SEC or (not long and d > MAX_SEC):
+                continue
+            ids.add(e["id"])
+            e["channel"], e["channel_id"] = channel, channel_id  # 一覧には入っていないので補う
+            cands.append(e)
+    return cands
+
+
 def fmt_dur(sec):
     if not sec:
         return "ライブ配信中"
@@ -159,7 +192,7 @@ def fmt_dur(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def choose(request, candidates, history, n=1, newest=False):
+def choose(request, candidates, history, n=1, newest=False, channel=None):
     """Claude に n 本選ばせる（再生する順）。戻り値 [(候補, 理由), ...]"""
     n = min(n, len(candidates))
     recent = [h for h in history if h.get("event") == "played"][-10:]
@@ -169,6 +202,11 @@ def choose(request, candidates, history, n=1, newest=False):
              for i, c in enumerate(candidates)]
     newest_rule = ("\n4. 新しい動画を優先する（候補は検索ワードごとに新しい順に並んでいる）"
                    if newest else "")
+    rule3 = ("3. 候補はすべてユーザーが気に入ったチャンネル「" + channel + "」の動画。"
+             "希望に合うものを優先し、足りなければこのチャンネルの中で面白そうなものを選ぶ。"
+             "最近観た動画や、選んだ動画どうしで同じ内容のものは避ける"
+             if channel else
+             "3. 最近観た動画や、選んだ動画どうしで似すぎるもの（同じチャンネルが続く・同じ内容）は避ける")
     obj = ask_claude(f"""YouTube の動画を{n}本選んでください。テレビで流しっぱなしにして、選んだ順に観ます。
 
 # 今回の希望（最優先）
@@ -178,7 +216,7 @@ def choose(request, candidates, history, n=1, newest=False):
 1. 今回の希望に合うものを選ぶ。これが最優先
 2. 好みメモ・評価・最近観た動画は「参考」。希望に合う候補の中で迷ったときだけ使う
    （ユーザーはいつもと毛色の違う動画も観たいので、過去の傾向に寄せすぎない）
-3. 最近観た動画や、選んだ動画どうしで似すぎるもの（同じチャンネルが続く・同じ内容）は避ける{newest_rule}
+{rule3}{newest_rule}
 
 # 参考：好みメモ
 {PREFS.read_text() if PREFS.exists() else '(なし)'}

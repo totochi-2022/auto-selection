@@ -107,10 +107,25 @@ class Mpv:
             return at.mpv_screen_args() if maximized else [*at.WSL_MPV_ARGS, "--geometry=60%x60%+80+80"]
         return ["--fs"] if maximized else []
 
+    @staticmethod
+    def kill_strays():
+        """前の web.py が残した mpv（同じソケットを使うもの）を止める。2 重に映るのを防ぐ"""
+        mark = f"--input-ipc-server={SOCK}".encode()
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                if mark in (d / "cmdline").read_bytes().split(b"\0"):
+                    os.kill(int(d.name), signal.SIGKILL)
+                    log(f"残っていた mpv（pid {d.name}）を止めました")
+            except (OSError, ValueError):
+                pass
+
     def ensure(self, maximized=True):
         if self.alive():
             return
         self.kill()
+        self.kill_strays()
         SOCK.unlink(missing_ok=True)
         cmd = ["mpv", "--idle=yes", "--force-window=yes", *self.screen_args(maximized),
                f"--input-ipc-server={SOCK}", f"--input-conf={INPUT_CONF}",
@@ -189,6 +204,7 @@ class App:
         self.queries, self.claude_live = [], False
         self.queue, self.now = [], None
         self.dropped = set()       # キューから外した動画（このセッション中は選ばない）
+        self.channel = None        # {"id", "name"}：気に入ったチャンネルからだけ選ぶモード
         self.picking = False
         self.play_on_fill = False  # キューが埋まったらすぐ再生する
         self.status = "希望を入力して「スタート」"
@@ -216,7 +232,7 @@ class App:
     def snapshot(self):
         with self.lock:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
-                    "claude_live": self.claude_live, "now": self.now, "queue": self.queue,
+                    "claude_live": self.claude_live, "channel": self.channel, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player}
 
     # ---- 選定 ----
@@ -229,6 +245,7 @@ class App:
             self.request = request
             self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest")}
             self.queries, self.claude_live = [], False
+            self.channel = None
             self.queue = []
             self.play_on_fill = True
             self.picking = False
@@ -249,7 +266,7 @@ class App:
         try:
             with self.lock:
                 request, opts, queries = self.request, dict(self.opts), list(self.queries)
-                claude_live = self.claude_live
+                claude_live, channel = self.claude_live, self.channel
             if not queries:
                 self.set_status("検索ワードを考えています…")
                 queries, claude_live = at.make_queries(request)
@@ -265,16 +282,22 @@ class App:
                 if self.now:
                     exclude.add(self.now["id"])
                 n = QUEUE_LEN - len(self.queue)
-            self.set_status("検索中: " + " / ".join(queries))
-            cands = at.gather(queries, normal=True, live=opts["live"] or claude_live,
-                              long=opts["long"], newest=opts["newest"], exclude=exclude)
+            if channel:
+                self.set_status(f"チャンネル「{channel['name']}」の動画を集めています…")
+                cands = at.channel_videos(channel["id"], channel["name"], queries,
+                                          long=opts["long"], exclude=exclude)
+            else:
+                self.set_status("検索中: " + " / ".join(queries))
+                cands = at.gather(queries, normal=True, live=opts["live"] or claude_live,
+                                  long=opts["long"], newest=opts["newest"], exclude=exclude)
             if gen != self.gen:
                 return
             if not cands:
                 self.set_status("観ていない候補が見つかりませんでした。希望を変えてみてください")
                 return
             self.set_status(f"候補 {len(cands)} 本から Claude が {n} 本選んでいます…")
-            picks = at.choose(request, cands, history, n=n, newest=opts["newest"])
+            picks = at.choose(request, cands, history, n=n, newest=opts["newest"],
+                              channel=channel and channel["name"])
             with self.lock:
                 if gen != self.gen:
                     return
@@ -282,7 +305,7 @@ class App:
                 for c, reason in picks:
                     if c["id"] not in have:
                         self.queue.append({"id": c["id"], "title": c.get("title") or "",
-                                           "channel": c.get("channel"),
+                                           "channel": c.get("channel"), "channel_id": c.get("channel_id"),
                                            "duration": c.get("duration"), "reason": reason})
                 play_now = self.play_on_fill and self.queue
                 self.status = f"次の {len(self.queue)} 本を用意しました"
@@ -428,6 +451,37 @@ class App:
         self.changed()
         self.refill()
 
+    def set_channel(self, on):
+        """今の動画のチャンネルからだけ次の候補を選ぶ（on=False で普通の選び方に戻す）"""
+        with self.lock:
+            now = self.now
+            if on:
+                if not now or not now.get("channel_id"):
+                    self.status = "この動画はチャンネルが分からないので使えません"
+                    on = None
+                else:
+                    self.channel = {"id": now["channel_id"], "name": now.get("channel") or "?"}
+            elif self.channel:
+                self.channel = None
+            else:
+                on = None
+            if on is not None:
+                self.gen += 1          # 選定中の結果は捨てる
+                self.queue = []
+                self.picking = False
+                self.status = (f"チャンネル「{self.channel['name']}」から選び直します" if on
+                               else "普通の選び方に戻しました")
+        self.changed()
+        if on is not None:
+            if on:
+                self.mpv.command("show-text", f"📺 {self.channel['name']} から選びます")
+                with self.lock:
+                    video, request = self.now, self.request
+                at.append_history({"event": "good", "ts": int(time.time()), "id": video["id"],
+                                   "title": video["title"], "channel": video.get("channel"),
+                                   "request": request})
+            self.refill()
+
     def stop(self):
         with self.lock:
             self.now = None
@@ -571,6 +625,7 @@ ACTIONS = {
     "seek": lambda b: app.seek(float(b.get("sec", 0))),
     "max": lambda b: app.toggle_max(),
     "rate": lambda b: app.rate(b.get("ev")),
+    "channel": lambda b: app.set_channel(bool(b.get("on"))),
     "q720": lambda b: app.set_q720(b.get("on")),
 }
 
@@ -645,6 +700,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     at.ensure_prefs()
+    Mpv.kill_strays()
+    # kill（SIGTERM）で止められたときも mpv を道連れにする（残ると次の起動で 2 重になる）
+    def on_term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, on_term)
     threading.Thread(target=app.watchdog, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
