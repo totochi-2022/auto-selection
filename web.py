@@ -482,6 +482,16 @@ class App:
                                    "request": request})
             self.refill()
 
+    def quit_player(self):
+        """mpv（再生アプリ）を終了してメモリを空ける。次に再生するときにまた起動する"""
+        with self.load_lock, self.lock:
+            self.now = None
+            self.play_on_fill = False
+            self.mpv.kill()
+            self.player.update(running=False, maximized=True, pos=0, dur=0)
+            self.status = "再生アプリを終了しました（キューの ▶ や「次へ」でまた起動します）"
+        self.changed()
+
     def stop(self):
         with self.lock:
             self.now = None
@@ -619,6 +629,7 @@ ACTIONS = {
     "drop": lambda b: app.drop_index(int(b.get("index", -1))),
     "reshuffle": lambda b: app.reshuffle(),
     "stop": lambda b: app.stop(),
+    "quit": lambda b: app.quit_player(),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),
