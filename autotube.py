@@ -19,6 +19,8 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import time
 import urllib.parse
@@ -78,12 +80,13 @@ def ensure_prefs():
         shutil.copy(BASE / "prefs.example.md", PREFS)  # 好みメモは個人用なので git 管理外
 
 
-def ask_claude(prompt):
-    """claude -p に聞いて、返事の中の JSON を取り出す"""
+def ask_claude(prompt, web=False):
+    """claude -p に聞いて、返事の中の JSON を取り出す。web=True ならネット検索（WebSearch）を使わせる"""
+    tools = ["--tools", "WebSearch", "--allowedTools", "WebSearch"] if web else ["--tools", ""]
     r = subprocess.run(
-        ["claude", "-p", "--model", CLAUDE_MODEL, "--tools", "",
+        ["claude", "-p", "--model", CLAUDE_MODEL, *tools,
          "--no-session-persistence", "--output-format", "text"],
-        input=prompt, capture_output=True, text=True, timeout=180, cwd=DATA,
+        input=prompt, capture_output=True, text=True, timeout=300 if web else 180, cwd=DATA,
     )
     text = r.stdout.strip()
     try:
@@ -194,6 +197,50 @@ def search_params(sort="", period="", live=False):
     return urllib.parse.quote(base64.b64encode(out).decode()) if out else ""
 
 
+def plan_similar(request):
+    """「〇〇みたいな」：〇〇のよいところを言葉にして、似た別の動画を探す（〇〇自身は外す）"""
+    obj = ask_claude(f"""次の希望は「ある動画・チャンネル（お手本）に似た、別の動画が観たい」というものです。
+
+# 希望
+{request}
+
+1. お手本（チャンネル名や動画の種類）を特定してください。音声入力の聞き間違いは正しい表記に直してください。
+2. お手本の「よいところ」（作り方・構成・扱う題材・語り口・長さなど）を、具体的に短く書いてください。
+   これを、あとで動画を選ぶ基準に使います。
+3. お手本そのものではなく、その特徴を持った別の動画が見つかる YouTube の検索ワードを3個考えてください。
+   お手本のチャンネル名は検索ワードに入れないでください。
+4. 長さの下限（分）も決めてください（短い動画では「よく練られた」ものになりにくいので、目安は 10 分）。
+
+次の JSON だけを1行で出力してください:
+{{"reference": "お手本の名前", "traits": "お手本のよいところ", "queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "min_minutes": 10}}""")
+    obj = obj or {}
+    qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()][:3]
+    filters = clean_filters({"min_minutes": obj.get("min_minutes", 10)})
+    return {"kind": "topic", "queries": qs or [request], "live": False, "channel": "", "filters": filters,
+            "traits": str(obj.get("traits") or ""), "exclude_channel": str(obj.get("reference") or "")}
+
+
+def plan_web(request):
+    """ネットの記事（人のおすすめ）から、YouTube で探す言葉を拾う。WebSearch を使うので 30 秒〜1 分かかる"""
+    obj = ask_claude(f"""次の希望に合う YouTube 動画を、YouTube のおすすめとは違う切り口で探したいです。
+ネット検索で、この希望に関係する「人が書いた記事・ブログ・まとめ・掲示板」（おすすめのチャンネル、番組、
+解説者、シリーズ、名作の紹介など）を探してください。YouTube 自体の検索結果ではなく、人が選んだ情報を使ってください。
+
+# 希望
+{request}
+
+見つけた情報から、YouTube で検索すると良い動画が出てきそうな言葉（チャンネル名・シリーズ名・人物名・
+具体的なテーマ）を4個選んでください。有名すぎる定番より、記事で評価されている少し通好みのものを優先してください。
+また、記事で褒められていた点（どこが良いと言われていたか）を短くまとめてください。
+
+次の JSON だけを1行で出力してください（説明文は不要）:
+{{"queries": ["言葉1", "言葉2", "言葉3", "言葉4"], "traits": "記事で褒められていた点"}}""", web=True)
+    obj = obj or {}
+    qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()][:4]
+    return {"kind": "topic", "queries": qs or [request], "live": False, "channel": "", "filters": {},
+            "traits": str(obj.get("traits") or "")}
+
+
 def make_queries(request):
     """（コマンド版用）戻り値 (検索ワード, ライブ希望か)"""
     plan = plan_search(request)
@@ -263,32 +310,37 @@ def passes(e, f, live=False):
     return True
 
 
-def gather(queries, *, normal=True, live=False, long=False, newest=False, exclude=(), filters=None):
-    """検索ワードごとに検索して、候補をまとめる（exclude の id と重複は除く）"""
+def gather(queries, *, normal=True, live=False, long=False, newest=False, exclude=(), filters=None, progress=None):
+    """検索ワードごとに検索して、候補をまとめる（exclude の id と重複は除く）。
+    progress(何回目, 全体, 検索ワード, ここまでの候補数) で進み具合を知らせる"""
     cands, ids = [], set(exclude)
     modes = ([False] if normal else []) + ([True] if live else [])
-    for q in queries:
-        for is_live in modes:
-            log(f"「{q}」を検索中…" + ("（ライブ）" if is_live else ""))
-            try:
-                found = search(q, live=is_live, long=long, newest=newest, filters=filters)
-            except (RuntimeError, subprocess.TimeoutExpired) as e:
-                log(str(e))
-                continue
-            for c in found:
-                if c["id"] not in ids:
-                    ids.add(c["id"])
-                    cands.append(c)
+    jobs = [(q, m) for q in queries for m in modes]
+    for k, (q, is_live) in enumerate(jobs, 1):
+        if progress:
+            progress(k, len(jobs), q + ("（ライブ）" if is_live else ""), len(cands))
+        log(f"「{q}」を検索中…" + ("（ライブ）" if is_live else ""))
+        try:
+            found = search(q, live=is_live, long=long, newest=newest, filters=filters)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            log(str(e))
+            continue
+        for c in found:
+            if c["id"] not in ids:
+                ids.add(c["id"])
+                cands.append(c)
     return cands
 
 
-def channel_videos(channel_id, channel, queries=(), *, long=False, exclude=()):
+def channel_videos(channel_id, channel, queries=(), *, long=False, exclude=(), progress=None):
     """チャンネルの動画を集める：新しい順の最新分＋チャンネル内で検索ワードを検索した結果"""
     base = f"https://www.youtube.com/channel/{channel_id}"
     targets = [(base + "/videos", "")] + [(base + "/search?query=" + urllib.parse.quote_plus(q), f"（{q}）")
                                           for q in queries]
     cands, ids = [], set(exclude)
-    for url, note in targets:
+    for k, (url, note) in enumerate(targets, 1):
+        if progress:
+            progress(k, len(targets), note.strip("（）") or "最新の動画", len(cands))
         log(f"チャンネル「{channel}」の動画を取得中…{note}")
         r = subprocess.run(
             ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--flat-playlist", "-J",
@@ -315,13 +367,14 @@ def fmt_dur(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def choose(request, candidates, history, n=1, newest=False, channel=None, kind="topic"):
+def choose(request, candidates, history, n=1, newest=False, channel=None, kind="topic", traits="", notes=None):
     """Claude に n 本選ばせる（再生する順）。戻り値 [(候補, 理由), ...]"""
     n = min(n, len(candidates))
     recent = [h for h in history if h.get("event") == "played"][-10:]
     rated = [h for h in history if h.get("event") in ("good", "bad")][-30:]
     lines = [f"{i}. {c['title']} ／ {c.get('channel') or '?'} ／ {fmt_dur(c.get('duration'))}"
              f" ／ {c.get('view_count') or '?'}回"
+             + (f"\n   字幕の抜粋: {notes[c['id']]}" if notes and notes.get(c["id"]) else "")
              for i, c in enumerate(candidates)]
     newest_rule = ("\n4. 新しい動画を優先する（候補は検索ワードごとに新しい順に並んでいる）"
                    if newest else "")
@@ -330,6 +383,11 @@ def choose(request, candidates, history, n=1, newest=False, channel=None, kind="
              "最近観た動画や、選んだ動画どうしで同じ内容のものは避ける"
              if channel else
              "3. 最近観た動画や、選んだ動画どうしで似すぎるもの（同じチャンネルが続く・同じ内容）は避ける")
+    if traits:
+        rule3 += "\n5. 次の特徴を持つ、よく練られた動画を優先する：" + traits
+    if notes:
+        rule3 += ("\n6. 候補の一部には字幕（話している内容）の抜粋を付けた。構成がしっかりしていて中身が濃いものを選び、"
+                  "同じ話の繰り返し・煽りばかり・中身の薄いものは避ける")
     if kind == "music" and not channel:
         rule3 += ("\n4. 音楽を聴きたい希望なので、曲そのものが聴ける動画（公式 MV・ライブ演奏・カバー・演奏してみた）を選ぶ。"
                   "解説・リアクション・切り抜き・ランキング紹介は避ける。同じ曲の別の演奏や、同じアーティストの別の曲は可")
@@ -371,6 +429,69 @@ def choose(request, candidates, history, n=1, newest=False, channel=None, kind="
         log("選べなかったので先頭の候補にします")
         picks = [(c, "(自動で選択)") for c in candidates[:n]]
     return picks[:n]
+
+
+SUBS_SHORTLIST = 20  # 字幕を読んで選ぶとき、字幕を取る候補の本数
+SUBS_PARALLEL = 4    # 字幕を同時に取る本数（多すぎると YouTube に 429 で断られる）
+SUBS_CHARS = 1200    # 1 本あたり Claude に見せる字幕の文字数
+
+
+def fetch_transcript(video_id):
+    """日本語の字幕（なければ自動字幕）を取って、冒頭と中ほどの抜粋を返す。取れなければ空文字"""
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(
+            ["yt-dlp", "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", "ja",
+             "--sub-format", "json3", "-o", f"{d}/%(id)s.%(ext)s",
+             # 字幕だけなら再生用の JavaScript は要らない（省くと Pi の CPU がだいぶ軽くなる）
+             "--extractor-args", "youtube:player_skip=js,configs", "--ignore-no-formats-error",
+             f"https://www.youtube.com/watch?v={video_id}"],
+            capture_output=True, text=True, timeout=60,
+        )
+        for f in Path(d).glob("*.json3"):
+            try:
+                ev = json.loads(f.read_text()).get("events") or []
+            except ValueError:
+                continue
+            text = "".join(seg.get("utf8", "") for e in ev for seg in (e.get("segs") or [])).replace("\n", " ")
+            if len(text) <= SUBS_CHARS:
+                return text
+            half = SUBS_CHARS // 2
+            mid = len(text) // 2
+            return text[:half] + " …（中略）… " + text[mid:mid + half]
+    return ""
+
+
+def _safe_transcript(video_id):
+    try:
+        return fetch_transcript(video_id)
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+
+
+def choose_with_subs(request, candidates, history, n=5, progress=None, **kw):
+    """字幕を読んで選ぶ：まず SUBS_SHORTLIST 本に絞り、字幕を読ませてから n 本選ぶ。
+    progress(段階, 済み, 全体) で進み具合を知らせる"""
+    report = progress or (lambda *a: None)
+    report("shortlist", 0, 0)
+    # 最初は SUBS_SHORTLIST 本。1〜2 本の補充のときは、足りない本数の 4 倍（最低 8 本）だけ字幕を読む
+    m = min(SUBS_SHORTLIST, max(4 * n, 8), len(candidates))
+    short = [c for c, _ in choose(request, candidates, history, n=m, **kw)]
+    live_ids = {c["id"] for c in short if not c.get("duration")}
+    targets = [c["id"] for c in short if c["id"] not in live_ids]
+    log(f"字幕を {len(targets)} 本取っています…")
+    notes, done = {}, 0
+    report("subs", 0, len(targets))
+    with ThreadPoolExecutor(SUBS_PARALLEL) as ex:
+        futs = {ex.submit(_safe_transcript, i): i for i in targets}
+        for fut in as_completed(futs):
+            done += 1
+            t = fut.result()
+            if t:
+                notes[futs[fut]] = t
+            report("subs", done, len(targets))
+    log(f"字幕が取れたのは {len(notes)} 本")
+    report("choose", len(notes), len(targets))
+    return choose(request, short, history, n=n, notes=notes, **kw)
 
 
 def pick_next(request, queries, live):

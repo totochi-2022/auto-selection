@@ -199,7 +199,9 @@ class App:
         self.version = 0
         self.gen = 0               # 希望を変えるたびに増やす（古い選定結果を捨てる）
         self.request = ""
-        self.opts = {"live": False, "long": False, "newest": False}
+        self.opts = {"live": False, "long": False, "newest": False, "mode": "normal", "subs": False}
+        self.traits = ""           # 「似たもの」「ネットの記事から」で選ぶときの基準
+        self.exclude_channel = ""  # 「似たもの」のお手本（候補から外す）
         self.q720 = at.IS_WSL  # 画質を 720p までにする（WSL は CPU で描画するので既定でオン）
         self.queries, self.claude_live = [], False
         self.filters = {}          # 希望から読み取った絞り込み（並べ方・期間・再生数・長さ）
@@ -225,6 +227,22 @@ class App:
             self.version += 1
             self.cond.notify_all()
 
+    def ticking(self, msg):
+        """長く待つ処理の間、経過秒数を付けて状態を出し続ける。止めるときは返り値の関数を呼ぶ"""
+        stop = threading.Event()
+        t0 = time.time()
+
+        def run():
+            while not stop.wait(1):
+                with self.lock:
+                    if not self.picking:
+                        return
+                    self.status = f"{msg}（{int(time.time() - t0)} 秒）"
+                self.changed()
+        self.set_status(msg)
+        threading.Thread(target=run, daemon=True).start()
+        return stop.set
+
     def set_status(self, s):
         at.log(s)
         with self.lock:
@@ -234,7 +252,7 @@ class App:
     def snapshot(self):
         with self.lock:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
-                    "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "channel": self.channel, "now": self.now, "queue": self.queue,
+                    "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player}
 
     # ---- 選定 ----
@@ -245,7 +263,9 @@ class App:
         with self.lock:
             self.gen += 1
             self.request = request
-            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest")}
+            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest", "subs")}
+            self.opts["mode"] = opts.get("mode") if opts.get("mode") in ("normal", "similar", "web") else "normal"
+            self.traits, self.exclude_channel = "", ""
             self.queries, self.claude_live = [], False
             self.kind = "topic"
             self.filters = {}
@@ -272,13 +292,22 @@ class App:
                 request, opts, queries = self.request, dict(self.opts), list(self.queries)
                 claude_live, channel, kind, filters = self.claude_live, self.channel, self.kind, dict(self.filters)
             if not queries:
-                self.set_status("探し方を考えています…")
-                plan = at.plan_search(request)
+                if opts["mode"] == "similar":
+                    done = self.ticking("お手本のよいところを考えています…")
+                    plan = at.plan_similar(request)
+                elif opts["mode"] == "web":
+                    done = self.ticking("ネットの記事から探しています（30 秒〜1 分）…")
+                    plan = at.plan_web(request)
+                else:
+                    done = self.ticking("探し方を考えています…")
+                    plan = at.plan_search(request)
+                done()
                 queries, claude_live, kind, filters = plan["queries"], plan["live"], plan["kind"], plan["filters"]
                 if kind == "channel" and not channel:
                     # チャンネル名の希望：YouTube でチャンネルを探して「このチャンネル」モードにする
-                    self.set_status(f"チャンネル「{plan['channel']}」を探しています…")
+                    done = self.ticking(f"チャンネル「{plan['channel']}」を探しています…")
                     channel = at.find_channel(plan["channel"])
+                    done()
                     if channel:
                         queries = [q for q in queries if q != request] or queries  # チャンネル内は短い言葉で
                     else:
@@ -287,6 +316,8 @@ class App:
                     if gen != self.gen:
                         return
                     self.queries, self.claude_live, self.kind, self.filters = queries, claude_live, kind, filters
+                    self.traits = plan.get("traits", "")
+                    self.exclude_channel = plan.get("exclude_channel", "")
                     if channel and not self.channel:
                         self.channel = channel
                 self.changed()
@@ -298,22 +329,49 @@ class App:
                     exclude.add(self.now["id"])
                 n = QUEUE_LEN - len(self.queue)
             if channel:
-                self.set_status(f"チャンネル「{channel['name']}」の動画を集めています…")
-                cands = at.channel_videos(channel["id"], channel["name"], queries,
-                                          long=opts["long"], exclude=exclude)
+                cands = at.channel_videos(
+                    channel["id"], channel["name"], queries, long=opts["long"], exclude=exclude,
+                    progress=lambda k, t, q, c: self.set_status(
+                        f"チャンネル「{channel['name']}」の動画を集めています {k}/{t}：{q}（候補 {c} 本）"))
                 cands = [c for c in cands if at.passes(c, filters)]
             else:
-                self.set_status("検索中: " + " / ".join(queries))
                 cands = at.gather(queries, normal=True, live=opts["live"] or claude_live,
-                                  long=opts["long"], newest=opts["newest"], exclude=exclude, filters=filters)
+                                  long=opts["long"], newest=opts["newest"], exclude=exclude, filters=filters,
+                                  progress=lambda k, t, q, c: self.set_status(
+                                      f"YouTube を検索中 {k}/{t}：「{q}」（候補 {c} 本）"))
+            with self.lock:
+                traits, ref = self.traits, self.exclude_channel
+            if ref:  # 「似たもの」：お手本のチャンネル自身は外す
+                key = ref.replace(" ", "").lower()
+                cands = [c for c in cands if key not in (c.get("channel") or "").replace(" ", "").lower()]
             if gen != self.gen:
                 return
             if not cands:
                 self.set_status("観ていない候補が見つかりませんでした。希望を変えてみてください")
                 return
-            self.set_status(f"候補 {len(cands)} 本から Claude が {n} 本選んでいます…")
-            picks = at.choose(request, cands, history, n=n, newest=opts["newest"],
-                              channel=channel and channel["name"], kind=kind)
+            kw = dict(newest=opts["newest"], channel=channel and channel["name"], kind=kind, traits=traits)
+            if opts["subs"]:
+                stopper = [lambda: None]
+
+                def progress(stage, k, total):
+                    stopper[0]()
+                    if stage == "shortlist":
+                        stopper[0] = self.ticking(f"【1/3】候補 {len(cands)} 本から字幕を読む分を絞っています…")
+                    elif stage == "subs":
+                        stopper[0] = lambda: None
+                        self.set_status(f"【2/3】字幕を取っています… {k}/{total} 本")
+                    else:
+                        stopper[0] = self.ticking(f"【3/3】字幕が取れた {k}/{total} 本を読んで {n} 本選んでいます…")
+                try:
+                    picks = at.choose_with_subs(request, cands, history, n=n, progress=progress, **kw)
+                finally:
+                    stopper[0]()
+            else:
+                done = self.ticking(f"候補 {len(cands)} 本から Claude が {n} 本選んでいます…")
+                try:
+                    picks = at.choose(request, cands, history, n=n, **kw)
+                finally:
+                    done()
             with self.lock:
                 if gen != self.gen:
                     return
@@ -369,6 +427,7 @@ class App:
         threading.Timer(1.0, self.mpv.command, ("set_property", "ontop", False)).start()
 
     def play(self, video):
+        self.set_status(f"「{video['title'][:40]}」を読み込んでいます…")
         try:
             self._load(video, restart=RESTART_PER_VIDEO)
         except RuntimeError as e:
@@ -378,7 +437,8 @@ class App:
             self.now = video
             self.play_on_fill = False
             self.player.update(pos=0, dur=video.get("duration") or 0, running=True)
-            self.status = "再生中"
+            self.loading = True  # 再生位置が進み始めたら「再生中」にする
+            self.status = f"「{video['title'][:40]}」を読み込んでいます…"
             self.progress_at, self.stalls = time.time(), 0
             request = self.request
         at.append_history({"event": "played", "ts": int(time.time()), "id": video["id"],
@@ -590,6 +650,10 @@ class App:
                         return
                     p["pos"] = val
                     self.progress_at = time.time()
+                    if getattr(self, "loading", False) and val > 0.5:
+                        self.loading = False
+                        if not self.picking:
+                            self.status = "再生中"
                 elif key == "duration" and val:
                     p["dur"] = val
                 elif key == "pause":
@@ -730,7 +794,9 @@ def main():
     Mpv.kill_strays()
     # kill（SIGTERM）で止められたときも mpv を道連れにする（残ると次の起動で 2 重になる）
     def on_term(*_):
-        raise KeyboardInterrupt
+        # 字幕の取得などの途中でも待たずに終わる（待つと次の web.py がポートを使えず起動できない）
+        app.mpv.kill()
+        os._exit(0)
     signal.signal(signal.SIGTERM, on_term)
     threading.Thread(target=app.watchdog, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)

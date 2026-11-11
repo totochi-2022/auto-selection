@@ -32,6 +32,14 @@
     border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate;
   }
   @keyframes pulse { from { opacity: .25 } to { opacity: 1 } }
+  /* 選んでいる間は、進み具合を画面の上に固定して大きめに出す */
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg, #111); padding: 6px 0; }
+  .status.busy { color: var(--accent); font-size: 15px; font-weight: 600; }
+  .qbusy { color: var(--accent); font-size: 14px; margin: -2px 0 8px; }
+  .qbusy::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px;
+    border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate;
+  }
   section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
   h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px; letter-spacing: .04em; }
 
@@ -144,6 +152,13 @@
         <label><input type="checkbox" id="optLive"> ライブを含む</label>
         <label><input type="checkbox" id="optLong"> 長時間（10時間超）も含む</label>
         <label><input type="checkbox" id="optNewest"> 最新動画を優先</label>
+        <label title="お手本の動画やチャンネルを書く">探し方
+          <select id="optMode">
+            <option value="normal">普通</option>
+            <option value="similar">似たもの（〇〇みたいな）</option>
+            <option value="web">ネットの記事から（遅い）</option>
+          </select></label>
+        <label title="候補 20 本の字幕を読ませて、中身のしっかりした動画を選ぶ"><input type="checkbox" id="optSubs"> 字幕を読んで選ぶ（遅い）</label>
       </div>
       <div class="queries" id="queries"></div>
       <button class="primary" type="submit">スタート</button>
@@ -159,6 +174,7 @@
         <button data-act="quit" title="再生アプリ（mpv）を終了してメモリを空ける">終了</button>
       </div>
     </div>
+    <div id="qbusy" class="qbusy"></div>
     <div id="chmode" class="chmode"></div>
     <ol id="queue"></ol>
     <div id="queueEmpty" class="empty">まだありません</div>
@@ -194,6 +210,8 @@ function render(s) {
   const st = $("status");
   st.textContent = s.status;
   st.classList.toggle("busy", s.picking);
+  $("qbusy").textContent = s.picking ? s.status : "";
+  $("qbusy").style.display = s.picking ? "" : "none";
 
   const n = s.now;
   $("now").className = n ? "now" : "empty";
@@ -234,10 +252,13 @@ function render(s) {
     $("optLive").checked = s.opts.live;
     $("optLong").checked = s.opts.long;
     $("optNewest").checked = s.opts.newest;
+    $("optMode").value = s.opts.mode || "normal";
+    $("optSubs").checked = !!s.opts.subs;
   }
   $("queries").textContent = s.queries.length
     ? ({ music: "🎵 音楽として探しています　", channel: "📺 チャンネルから探しています　" }[s.kind] || "")
       + (s.filters ? "【" + s.filters + "】 " : "")
+      + (s.traits ? "（基準: " + s.traits + "） " : "")
       + "検索ワード: " + s.queries.join(" / ") + (s.claude_live && !s.opts.live ? "（Claude の判断でライブも含む）" : "")
     : "";
 
@@ -292,7 +313,7 @@ $("vol").addEventListener("change", () => {
 
 $("optQ720").addEventListener("change", (e) => api("q720", { on: e.target.checked }));
 
-for (const id of ["request", "optLive", "optLong", "optNewest"]) {
+for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs"]) {
   $(id).addEventListener("input", () => { formTouched = true; });
 }
 
@@ -301,7 +322,8 @@ $("form").addEventListener("submit", (e) => {
   const request = $("request").value.trim();
   if (!request) return $("request").focus();
   formTouched = false;
-  api("start", { request, opts: { live: $("optLive").checked, long: $("optLong").checked, newest: $("optNewest").checked } });
+  api("start", { request, opts: { live: $("optLive").checked, long: $("optLong").checked, newest: $("optNewest").checked,
+                          mode: $("optMode").value, subs: $("optSubs").checked } });
 });
 $("request").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("form").requestSubmit();
