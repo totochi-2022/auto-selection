@@ -236,7 +236,9 @@ function render(s) {
     $("optNewest").checked = s.opts.newest;
   }
   $("queries").textContent = s.queries.length
-    ? "検索ワード: " + s.queries.join(" / ") + (s.claude_live && !s.opts.live ? "（Claude の判断でライブも含む）" : "")
+    ? ({ music: "🎵 音楽として探しています　", channel: "📺 チャンネルから探しています　" }[s.kind] || "")
+      + (s.filters ? "【" + s.filters + "】 " : "")
+      + "検索ワード: " + s.queries.join(" / ") + (s.claude_live && !s.opts.live ? "（Claude の判断でライブも含む）" : "")
     : "";
 
   $("queue").innerHTML = s.queue.map((v, i) => `

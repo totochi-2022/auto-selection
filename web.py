@@ -202,6 +202,8 @@ class App:
         self.opts = {"live": False, "long": False, "newest": False}
         self.q720 = at.IS_WSL  # 画質を 720p までにする（WSL は CPU で描画するので既定でオン）
         self.queries, self.claude_live = [], False
+        self.filters = {}          # 希望から読み取った絞り込み（並べ方・期間・再生数・長さ）
+        self.kind = "topic"        # 希望の種類：music（音楽）/ channel（チャンネル）/ topic（それ以外）
         self.queue, self.now = [], None
         self.dropped = set()       # キューから外した動画（このセッション中は選ばない）
         self.channel = None        # {"id", "name"}：気に入ったチャンネルからだけ選ぶモード
@@ -232,7 +234,7 @@ class App:
     def snapshot(self):
         with self.lock:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
-                    "claude_live": self.claude_live, "channel": self.channel, "now": self.now, "queue": self.queue,
+                    "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "channel": self.channel, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player}
 
     # ---- 選定 ----
@@ -245,6 +247,8 @@ class App:
             self.request = request
             self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest")}
             self.queries, self.claude_live = [], False
+            self.kind = "topic"
+            self.filters = {}
             self.channel = None
             self.queue = []
             self.play_on_fill = True
@@ -266,14 +270,25 @@ class App:
         try:
             with self.lock:
                 request, opts, queries = self.request, dict(self.opts), list(self.queries)
-                claude_live, channel = self.claude_live, self.channel
+                claude_live, channel, kind, filters = self.claude_live, self.channel, self.kind, dict(self.filters)
             if not queries:
-                self.set_status("検索ワードを考えています…")
-                queries, claude_live = at.make_queries(request)
+                self.set_status("探し方を考えています…")
+                plan = at.plan_search(request)
+                queries, claude_live, kind, filters = plan["queries"], plan["live"], plan["kind"], plan["filters"]
+                if kind == "channel" and not channel:
+                    # チャンネル名の希望：YouTube でチャンネルを探して「このチャンネル」モードにする
+                    self.set_status(f"チャンネル「{plan['channel']}」を探しています…")
+                    channel = at.find_channel(plan["channel"])
+                    if channel:
+                        queries = [q for q in queries if q != request] or queries  # チャンネル内は短い言葉で
+                    else:
+                        kind = "topic"  # 見つからなければ普通に探す
                 with self.lock:
                     if gen != self.gen:
                         return
-                    self.queries, self.claude_live = queries, claude_live
+                    self.queries, self.claude_live, self.kind, self.filters = queries, claude_live, kind, filters
+                    if channel and not self.channel:
+                        self.channel = channel
                 self.changed()
             history = at.load_history()
             with self.lock:
@@ -286,10 +301,11 @@ class App:
                 self.set_status(f"チャンネル「{channel['name']}」の動画を集めています…")
                 cands = at.channel_videos(channel["id"], channel["name"], queries,
                                           long=opts["long"], exclude=exclude)
+                cands = [c for c in cands if at.passes(c, filters)]
             else:
                 self.set_status("検索中: " + " / ".join(queries))
                 cands = at.gather(queries, normal=True, live=opts["live"] or claude_live,
-                                  long=opts["long"], newest=opts["newest"], exclude=exclude)
+                                  long=opts["long"], newest=opts["newest"], exclude=exclude, filters=filters)
             if gen != self.gen:
                 return
             if not cands:
@@ -297,7 +313,7 @@ class App:
                 return
             self.set_status(f"候補 {len(cands)} 本から Claude が {n} 本選んでいます…")
             picks = at.choose(request, cands, history, n=n, newest=opts["newest"],
-                              channel=channel and channel["name"])
+                              channel=channel and channel["name"], kind=kind)
             with self.lock:
                 if gen != self.gen:
                     return

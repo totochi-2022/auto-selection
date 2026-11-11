@@ -14,6 +14,7 @@ mpv のキー: n=次へ  q=終了  g=👍  b=👎
 （Web 画面から操作したいときは web.py を使う）
 """
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -43,6 +44,7 @@ YTDL_FORMAT = ytdl_format(1080)
 SEARCH_URL = "https://www.youtube.com/results?search_query="
 LIVE_FILTER = "EgJAAQ%3D%3D"  # YouTube 検索の「ライブ」絞り込み
 DATE_SORT = "CAI%3D"          # YouTube 検索の「アップロード日（新しい順）」
+CHANNEL_FILTER = "EgIQAg%3D%3D"  # YouTube 検索の「チャンネル」絞り込み
 CLAUDE_MODEL = os.environ.get("AUTOTUBE_MODEL", "haiku")
 QUIT_STOP = 4  # mpv-input.conf の q
 IS_WSL = bool(os.environ.get("WSL_DISTRO_NAME"))
@@ -91,41 +93,144 @@ def ask_claude(prompt):
         return None
 
 
-def make_queries(request):
-    """希望から YouTube の検索ワードを考えてもらう。戻り値 (検索ワード, ライブ希望か)"""
-    obj = ask_claude(f"""次の希望に合う YouTube 動画を探すための検索ワードを3個考えてください。
-希望の内容から外れないことが最優先です。
-- 曲名・作品名・人名など「特定のもの」を観たい希望なら、余計な言葉（解説・実況など）は足さない。
-  正しい表記（音声入力の聞き間違いや表記ゆれを直したもの）、英語や原題の表記、「演奏」「歌ってみた」など
-  そのものが観られる言葉で探す。
-- 分野やテーマの希望なら、同じような動画ばかりにならないよう切り口を変える（例：解説・実況・ドキュメンタリー・講座など）。
+def plan_search(request):
+    """希望から探し方を決めてもらう。
+    戻り値 {"kind": "music"|"channel"|"topic", "queries": [...], "live": bool, "channel": チャンネル名}"""
+    obj = ask_claude(f"""次の希望に合う YouTube 動画を探します。まず、希望がどの種類かを判断してください。
+- "music"：曲名・歌手名・アーティスト名・アルバム名など、音楽を聴きたい希望
+- "channel"：YouTube のチャンネル名や、特定の YouTuber・番組・公式アカウントの動画を観たい希望
+- "topic"：上のどちらでもない、分野・テーマ・作品・人物などの希望
+
+次に、検索ワードを3個考えてください。希望の内容から外れないことが最優先です。
+- music：曲そのものが聴ける言葉で探す（正しい曲名・アーティスト名、英語や原題の表記、「MV」「ライブ」「演奏」「cover」など）。
+  解説・リアクションになる言葉は足さない。
+- channel：チャンネル内で探すための短い言葉（そのチャンネルの定番シリーズ名など。なければ希望の言葉）。
+- topic：曲名・作品名・人名など特定のものなら余計な言葉は足さず、正しい表記や「そのもの」が観られる言葉で探す。
+  分野やテーマなら、同じような動画ばかりにならないよう切り口を変える（解説・実況・ドキュメンタリー・講座など）。
+音声入力の聞き間違いや表記ゆれは、正しい表記に直してください。
+
+さらに、希望が「単語（曲名・人名・作品名・チャンネル名などの短い言葉）」か「文章（条件や雰囲気を説明している）」かを
+判断してください（keyword）。単語なら、その言葉そのものでも検索します。
+
+希望に条件が含まれていれば、絞り込み（filters）にしてください。含まれていなければ空にします。
+- sort：並べ方。"date"（新しい順）/ "views"（再生数の多い順）/ ""（指定なし）
+- period：アップロード日。"hour" / "today" / "week" / "month" / "year" / ""（指定なし）
+- min_views / max_views：再生数の下限・上限（整数）。指定がなければ null
+- min_minutes / max_minutes：長さの下限・上限（分）。指定がなければ null
+例：「新しい将棋の動画で再生数 100 回以内」→ sort "date"、period "today"、max_views 100、
+   検索ワードは「将棋」のような短く広い言葉にする（再生数の少ない動画は、今日アップロードされたものを
+   新しい順に見ないとほとんど見つからない。言葉を足すと 0 件になりやすい）
 
 # 希望
 {request}
 
 また、希望が「今配信中のライブ・生配信・生中継」を観たいものかどうかも判断してください
-（過去の中継の解説やアーカイブを観たいだけなら false）。
+（過去の中継の解説やアーカイブ、音楽のライブ映像を観たいだけなら false）。
 
 次の JSON だけを1行で出力してください:
-{{"queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "live": true または false}}""")
+{{"kind": "music" または "channel" または "topic", "channel": "channel のときだけチャンネル名（正しい表記）、それ以外は空", "keyword": true または false, "queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "live": true または false, "filters": {{"sort": "", "period": "", "min_views": null, "max_views": null, "min_minutes": null, "max_minutes": null}}}}""")
     obj = obj or {}
     qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()][:3]
-    # 希望そのものでも探す。YouTube は単独なら表記の間違いを補正してくれるが、言葉を足すと補正されず 0 件になる
-    if len(request) <= 40 and request not in qs:
+    # 単語の希望は、その言葉そのものでも探す（YouTube は単独なら表記の間違いを補正してくれるが、
+    # 言葉を足すと補正されず 0 件になる）。文章の希望は Claude が直した検索ワードだけを使う
+    if (obj.get("keyword") is not False or not qs) and len(request) <= 40 and request not in qs:
         qs.insert(0, request)
-    return qs or [request], obj.get("live") is True
+    kind = obj.get("kind") if obj.get("kind") in ("music", "channel", "topic") else "topic"
+    channel = str(obj.get("channel") or "").strip()
+    if kind == "channel" and not channel:
+        kind = "topic"
+    return {"kind": kind, "queries": qs or [request], "live": obj.get("live") is True, "channel": channel,
+            "filters": clean_filters(obj.get("filters"))}
 
 
-def search(query, live=False, long=False, newest=False):
-    """YouTube を検索する。
-    live=True: 配信中のライブだけ / long=True: 10 時間超も含める / newest=True: 新しい順"""
-    q = urllib.parse.quote_plus(query)
+def clean_filters(f):
+    """Claude が返した絞り込みを確かめて整える（おかしな値は捨てる）"""
+    f = f if isinstance(f, dict) else {}
+    out = {}
+    if f.get("sort") in ("date", "views"):
+        out["sort"] = f["sort"]
+    if f.get("period") in PERIODS:
+        out["period"] = f["period"]
+    for k in ("min_views", "max_views", "min_minutes", "max_minutes"):
+        try:
+            v = int(f.get(k))
+            if v >= 0:
+                out[k] = v
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def describe_filters(f):
+    """絞り込みを短い日本語にする（リモコンの表示用）"""
+    parts = []
+    if f.get("sort"):
+        parts.append({"date": "新しい順", "views": "再生数順"}[f["sort"]])
+    if f.get("period"):
+        parts.append({"hour": "1時間以内", "today": "今日", "week": "今週", "month": "今月", "year": "今年"}[f["period"]])
+    if "min_views" in f or "max_views" in f:
+        parts.append(f"再生数 {f.get('min_views', 0):,}〜{'' if 'max_views' not in f else format(f['max_views'], ',')}回")
+    if "min_minutes" in f or "max_minutes" in f:
+        parts.append(f"長さ {f.get('min_minutes', '')}〜{f.get('max_minutes', '')}分")
+    return "・".join(parts)
+
+
+PERIODS = {"hour": 1, "today": 2, "week": 3, "month": 4, "year": 5}
+
+
+def search_params(sort="", period="", live=False):
+    """YouTube 検索の絞り込み（URL の sp=）を作る。中身は protobuf：
+    1=並べ方（2 新しい順、3 再生数順）、2=フィルタ { 1=アップロード日, 8=ライブ }"""
+    inner = b""
+    if period in PERIODS:
+        inner += bytes([0x08, PERIODS[period]])
     if live:
-        target = [SEARCH_URL + q + "&sp=" + LIVE_FILTER, "--playlist-end", str(N_PER_QUERY)]
-    elif newest:
-        target = [SEARCH_URL + q + "&sp=" + DATE_SORT, "--playlist-end", str(N_PER_QUERY)]
+        inner += b"\x40\x01"
+    out = b""
+    if sort in ("date", "views"):
+        out += bytes([0x08, {"date": 2, "views": 3}[sort]])
+    if inner:
+        out += bytes([0x12, len(inner)]) + inner
+    return urllib.parse.quote(base64.b64encode(out).decode()) if out else ""
+
+
+def make_queries(request):
+    """（コマンド版用）戻り値 (検索ワード, ライブ希望か)"""
+    plan = plan_search(request)
+    return plan["queries"], plan["live"]
+
+
+def find_channel(name):
+    """チャンネル名から YouTube のチャンネルを探す。戻り値 {"id", "name"} か None"""
+    r = subprocess.run(
+        ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--flat-playlist", "-J", "--playlist-end", "1",
+         SEARCH_URL + urllib.parse.quote_plus(name) + "&sp=" + CHANNEL_FILTER],
+        capture_output=True, text=True, timeout=60,
+    )
+    if r.returncode != 0:
+        log(f"チャンネルの検索に失敗: {r.stderr.strip()[-300:]}")
+        return None
+    for e in json.loads(r.stdout).get("entries") or []:
+        cid = e.get("channel_id") or e.get("id")
+        if cid and cid.startswith("UC"):
+            return {"id": cid, "name": e.get("channel") or e.get("title") or name}
+    return None
+
+
+def search(query, live=False, long=False, newest=False, filters=None):
+    """YouTube を検索する。
+    live=True: 配信中のライブだけ / long=True: 10 時間超も含める / newest=True: 新しい順
+    filters: plan_search の絞り込み（並べ方・アップロード日は YouTube 側で、再生数・長さは結果を見て絞る）"""
+    f = filters or {}
+    q = urllib.parse.quote_plus(query)
+    sort = "date" if newest else f.get("sort", "")
+    sp = search_params(sort=sort, period=f.get("period", ""), live=live)
+    # 再生数・長さで絞るときは、残る本数が減るので多めに取る
+    n = N_PER_QUERY * (3 if any(k in f for k in ("min_views", "max_views", "min_minutes", "max_minutes")) else 1)
+    if sp:
+        target = [SEARCH_URL + q + "&sp=" + sp, "--playlist-end", str(n)]
     else:
-        target = [f"ytsearch{N_PER_QUERY}:{query}"]
+        target = [f"ytsearch{n}:{query}"]
     r = subprocess.run(
         ["yt-dlp", "--extractor-args", "youtube:lang=ja",  # 付けないとタイトルが英訳されることがある
          "--flat-playlist", "-J", *target],
@@ -134,13 +239,31 @@ def search(query, live=False, long=False, newest=False):
     if r.returncode != 0:
         raise RuntimeError(f"yt-dlp の検索に失敗: {r.stderr.strip()[-300:]}")
     entries = json.loads(r.stdout).get("entries") or []
+    # 再生数の少ない動画が見つからなければ、今日アップロードされたものに絞ってもう一度だけ探す
+    if ("max_views" in f and f.get("period") not in ("hour", "today")
+            and not any(passes(e, f) for e in entries)):
+        log(f"再生数 {f['max_views']} 回以下が見つからないので、今日の動画で探し直します")
+        return search(query, live=live, long=long, newest=True, filters={**f, "period": "today"})
     if live:
-        return [e for e in entries if e.get("id") and e.get("live_status") == "is_live"]
+        return [e for e in entries if e.get("id") and e.get("live_status") == "is_live" and passes(e, f, live=True)]
     return [e for e in entries if e.get("id") and e.get("duration")
-            and MIN_SEC <= e["duration"] and (long or e["duration"] <= MAX_SEC)]
+            and MIN_SEC <= e["duration"] and (long or e["duration"] <= MAX_SEC) and passes(e, f)]
 
 
-def gather(queries, *, normal=True, live=False, long=False, newest=False, exclude=()):
+def passes(e, f, live=False):
+    """再生数・長さの絞り込みに合うか（分からない値は通す）"""
+    v = e.get("view_count")
+    if v is not None:
+        if v < f.get("min_views", 0) or ("max_views" in f and v > f["max_views"]):
+            return False
+    d = e.get("duration")
+    if d and not live:
+        if d < f.get("min_minutes", 0) * 60 or ("max_minutes" in f and d > f["max_minutes"] * 60):
+            return False
+    return True
+
+
+def gather(queries, *, normal=True, live=False, long=False, newest=False, exclude=(), filters=None):
     """検索ワードごとに検索して、候補をまとめる（exclude の id と重複は除く）"""
     cands, ids = [], set(exclude)
     modes = ([False] if normal else []) + ([True] if live else [])
@@ -148,7 +271,7 @@ def gather(queries, *, normal=True, live=False, long=False, newest=False, exclud
         for is_live in modes:
             log(f"「{q}」を検索中…" + ("（ライブ）" if is_live else ""))
             try:
-                found = search(q, live=is_live, long=long, newest=newest)
+                found = search(q, live=is_live, long=long, newest=newest, filters=filters)
             except (RuntimeError, subprocess.TimeoutExpired) as e:
                 log(str(e))
                 continue
@@ -192,7 +315,7 @@ def fmt_dur(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def choose(request, candidates, history, n=1, newest=False, channel=None):
+def choose(request, candidates, history, n=1, newest=False, channel=None, kind="topic"):
     """Claude に n 本選ばせる（再生する順）。戻り値 [(候補, 理由), ...]"""
     n = min(n, len(candidates))
     recent = [h for h in history if h.get("event") == "played"][-10:]
@@ -207,6 +330,9 @@ def choose(request, candidates, history, n=1, newest=False, channel=None):
              "最近観た動画や、選んだ動画どうしで同じ内容のものは避ける"
              if channel else
              "3. 最近観た動画や、選んだ動画どうしで似すぎるもの（同じチャンネルが続く・同じ内容）は避ける")
+    if kind == "music" and not channel:
+        rule3 += ("\n4. 音楽を聴きたい希望なので、曲そのものが聴ける動画（公式 MV・ライブ演奏・カバー・演奏してみた）を選ぶ。"
+                  "解説・リアクション・切り抜き・ランキング紹介は避ける。同じ曲の別の演奏や、同じアーティストの別の曲は可")
     obj = ask_claude(f"""YouTube の動画を{n}本選んでください。テレビで流しっぱなしにして、選んだ順に観ます。
 
 # 今回の希望（最優先）
