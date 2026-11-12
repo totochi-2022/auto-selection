@@ -14,6 +14,7 @@ import os
 import secrets
 import signal
 import socket
+import shutil
 import subprocess
 import sys
 import threading
@@ -568,6 +569,32 @@ class App:
             self.status = "再生アプリを終了しました（キューの ▶ や「次へ」でまた起動します）"
         self.changed()
 
+    def open_browser(self):
+        """今の動画を、今の再生位置から Brave（YouTube のページ）で開く。コメントや概要欄を見る用。mpv は一時停止"""
+        with self.lock:
+            video, pos = self.now, int(self.player["pos"] or 0)
+        if not video:
+            self.set_status("再生中の動画がありません")
+            return
+        url = f"https://www.youtube.com/watch?v={video['id']}" + (f"&t={pos}s" if pos > 0 else "")
+        self.mpv.command("set_property", "pause", True)
+        if at.IS_WSL:
+            cmd = ["cmd.exe", "/c", "start", "", url]
+        else:
+            self.mpv.command("set_property", "fullscreen", False)
+            cmd = [shutil.which("brave-browser") or "brave-browser", url]
+        try:
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, env=at.mpv_env())
+        except OSError as e:
+            self.set_status(f"ブラウザを開けませんでした：{e}")
+            return
+        if not at.IS_WSL and shutil.which("wlrctl"):
+            time.sleep(1.5)  # タブが開いてから Brave を前に出す
+            subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=at.mpv_env())
+        self.set_status("Brave で開きました（動画は一時停止中。F7 で戻れます）")
+
     def stop(self):
         with self.lock:
             self.now = None
@@ -710,6 +737,7 @@ ACTIONS = {
     "reshuffle": lambda b: app.reshuffle(),
     "stop": lambda b: app.stop(),
     "quit": lambda b: app.quit_player(),
+    "browser": lambda b: app.open_browser(),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),

@@ -53,7 +53,7 @@
   .progress { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .bar { flex: 1; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; cursor: pointer; }
   .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .4s linear; }
-  .controls { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-top: 12px; }
+  .controls { display: grid; grid-template-columns: repeat(9, 1fr); gap: 8px; margin-top: 12px; }
   button {
     font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
     border-radius: 10px; padding: 10px 6px; cursor: pointer; min-height: 44px;
@@ -103,8 +103,29 @@
   @media (max-width: 480px) {
     .now { grid-template-columns: 1fr; }
     li { grid-template-columns: 88px 1fr auto; }
-    .controls { grid-template-columns: repeat(4, 1fr); }  /* スマホでは 2 段に */
+    .controls { grid-template-columns: repeat(5, 1fr); }  /* スマホでは 2 段に */
     .controls button { font-size: 16px; padding: 8px 2px; }
+  }
+
+  /* 横画面（PC・テレビ・スマホ横向き）：左に再生中と希望、右にネクスト。幅で自動に切り替わる */
+  @media (min-width: 960px), (orientation: landscape) and (min-width: 640px) {
+    main {
+      max-width: 1400px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "head head" "now next" "form next"; align-items: start;
+    }
+    header { grid-area: head; }
+    main > section:nth-of-type(1) { grid-area: now; }
+    main > section:nth-of-type(2) { grid-area: form; }
+    main > section:nth-of-type(3) { grid-area: next; position: sticky; top: 48px; max-height: calc(100vh - 60px); overflow-y: auto; }
+    .now { grid-template-columns: 200px 1fr; }
+  }
+  /* 横向きでも狭いとき（スマホ横向き）は詰める */
+  @media (orientation: landscape) and (max-height: 500px) {
+    main { padding: 8px 12px 16px; gap: 10px; }
+    section { padding: 10px; }
+    .now { grid-template-columns: 140px 1fr; }
+    .controls button { font-size: 16px; padding: 6px 2px; min-height: 38px; }
+    li { grid-template-columns: 88px 1fr auto; }
   }
 </style>
 </head>
@@ -132,6 +153,7 @@
       <button data-act="rate" data-ev="good" title="好き">👍<small>好き</small></button>
       <button data-act="rate" data-ev="bad" title="いまいち">👎<small>いまいち</small></button>
       <button data-act="channel" id="chBtn" title="気に入ったら：次の候補をこの動画のチャンネルから選ぶ">📺<small>このチャンネル</small></button>
+      <button data-act="browser" title="この動画を YouTube のページで開く（コメント・概要欄を見る）。mpv は一時停止">💬<small>YouTube で開く</small></button>
     </div>
     <div class="volume">
       <button data-act="volume" data-delta="-5" title="音量を下げる">−</button>
