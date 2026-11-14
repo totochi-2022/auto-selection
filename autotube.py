@@ -17,6 +17,7 @@ import argparse
 import base64
 import json
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -35,14 +36,23 @@ INPUT_CONF = BASE / "mpv-input.conf"
 N_PER_QUERY = 15
 CHANNEL_N = 40  # 「このチャンネル」モードで取る本数（最新分・チャンネル内検索それぞれ）
 MIN_SEC, MAX_SEC = 120, 10 * 3600  # ショートと極端に長いものを除く
+# 画質の上限とコーデック。Pi 5 は H.264 のハードウェアデコードがなく、WSL は CPU で描画するので
+# 1080p の H.264（avc1）に絞る。それ以外の PC（Intel の GPU など）は AV1 だけ避けて 4K まで
+# （AV1 は古い GPU だとハードウェアデコードできず重い）。上限は AUTOTUBE_MAX_H で変えられる
+IS_LIGHT = platform.machine() in ("aarch64", "armv7l") or bool(os.environ.get("WSL_DISTRO_NAME"))
+VCODEC = "[vcodec^=avc1]" if IS_LIGHT else "[vcodec!^=av01]"
+MAX_H = int(os.environ.get("AUTOTUBE_MAX_H") or (1080 if IS_LIGHT else 2160))
+
+
 # HLS（m3u8）を優先する。通常の DASH 形式は mpv(ffmpeg) が直接取りに行くと 403 で拒否されることがある
-def ytdl_format(max_h=1080):
-    return (f"bv[protocol^=m3u8][height<={max_h}][vcodec^=avc1]+ba[protocol^=m3u8]"
+def ytdl_format(max_h=None):
+    max_h = min(max_h or MAX_H, MAX_H)
+    return (f"bv[protocol^=m3u8][height<={max_h}]{VCODEC}+ba[protocol^=m3u8]"
             f"/b[protocol^=m3u8][height<={max_h}]"
-            f"/bv[height<={max_h}][vcodec^=avc1]+ba/b[height<={max_h}]/b")
+            f"/bv[height<={max_h}]{VCODEC}+ba/b[height<={max_h}]/b")
 
 
-YTDL_FORMAT = ytdl_format(1080)
+YTDL_FORMAT = ytdl_format()
 SEARCH_URL = "https://www.youtube.com/results?search_query="
 LIVE_FILTER = "EgJAAQ%3D%3D"  # YouTube 検索の「ライブ」絞り込み
 DATE_SORT = "CAI%3D"          # YouTube 検索の「アップロード日（新しい順）」

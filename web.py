@@ -410,7 +410,7 @@ class App:
             self.mpv.kill()
         self.mpv.ensure(maximized)
         self.mpv.command("set_property", "force-media-title", video["title"])
-        self.mpv.command("set_property", "ytdl-format", at.ytdl_format(720 if self.q720 else 1080))
+        self.mpv.command("set_property", "ytdl-format", at.ytdl_format(720 if self.q720 else None))
         url = f"https://www.youtube.com/watch?v={video['id']}"
         if start > 5:
             self.mpv.command("loadfile", url, "replace", -1, f"start={int(start)}")
