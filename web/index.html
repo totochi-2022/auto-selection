@@ -169,7 +169,7 @@
 
   <section>
     <h2>観たいもの</h2>
-    <form id="form">
+    <form id="form" autocomplete="off">
       <textarea id="request" placeholder="例：将棋　いつもと違う感じで、棋士の素顔がわかるような"></textarea>
       <div class="opts">
         <label><input type="checkbox" id="optLive"> ライブを含む</label>
@@ -211,6 +211,7 @@ const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.search).get("t") || "";  // 合言葉（phone-input と共通）
 let state = null;
 let formTouched = false;
+let lastServerForm = null;  // 最後に見たサーバー側のリクエストと選択
 
 const fmt = (sec) => {
   if (!sec) return "0:00";
@@ -278,6 +279,9 @@ function render(s) {
     : rd ? `📻 「${rd.title}」のラジオから選んでいます` : "";
   $("chmode").style.display = ch || rd ? "" : "none";
 
+  // 別の端末でスタートされた（サーバーのリクエスト・選択が変わった）ら、こちらで触りかけでも上書きする
+  const serverForm = JSON.stringify([s.request, s.opts]);
+  if (serverForm !== lastServerForm) { lastServerForm = serverForm; formTouched = false; }
   if (!formTouched) {
     $("request").value = s.request;
     $("optLive").checked = s.opts.live;
@@ -353,6 +357,7 @@ $("optMusic").addEventListener("change", (e) => { if (!e.target.checked) $("optY
 
 for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs", "optMusic", "optYtm"]) {
   $(id).addEventListener("input", () => { formTouched = true; });
+  $(id).addEventListener("change", () => { formTouched = true; });
 }
 
 $("form").addEventListener("submit", (e) => {
