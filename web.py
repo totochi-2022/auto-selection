@@ -58,6 +58,9 @@ def load_token():
 
 
 TOKEN = load_token()
+# 合言葉を求めるか。既定は求めない（家の LAN の中で、どの端末からでも ?t= なしで開けるように。
+# できるのは動画の操作だけ）。求めたいときは AUTOTUBE_REQUIRE_TOKEN=1。?t= を付けて開いても使える
+REQUIRE_TOKEN = os.environ.get("AUTOTUBE_REQUIRE_TOKEN") == "1"
 
 
 class Mpv:
@@ -824,6 +827,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _authed(self):
+        if not REQUIRE_TOKEN:
+            return True
         q = parse_qs(urlparse(self.path).query)
         return secrets.compare_digest(q.get("t", [""])[0], TOKEN) or \
             secrets.compare_digest(self.headers.get("X-Token", ""), TOKEN)
@@ -890,7 +895,7 @@ def main():
     threading.Thread(target=app.watchdog, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
-    log(f"http://localhost:{PORT}/?t={TOKEN} で待っています（Ctrl+C で終了）")
+    log(f"http://localhost:{PORT}/" + (f"?t={TOKEN}" if REQUIRE_TOKEN else "") + " で待っています（Ctrl+C で終了）")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

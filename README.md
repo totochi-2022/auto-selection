@@ -26,7 +26,7 @@ python3 web.py        # http://<このマシン>:8766/ を開く
 - **YouTube Music で選ぶ**：YouTube Music で曲を探し、その曲のラジオ（似た曲の自動プレイリスト）から Claude が選ぶ。曲名だけの検索結果より、アーティスト・長さの分かるラジオの方が選びやすいため
 - **📻 ラジオ**：今の曲を起点にしたラジオから次を選ぶ（「このチャンネル」と同じく、押すと切り替わり、もう一度で解除）。起点の曲と、いま流れている曲のラジオを合わせて、流れから外れた曲は Claude が外す
 - mpv は 1 つを常駐させ、JSON IPC（`--input-ipc-server`）で操作する。mpv のキーは `mpv-input-web.conf`（n=次へ、g=👍、b=👎、q=mpv を閉じる）
-- 環境変数 `AUTOTUBE_HOST`（既定 `0.0.0.0`）・`AUTOTUBE_PORT`（既定 `8766`。8765 は phone-input が使う）。認証はないので家の LAN の中だけで使う
+- 環境変数 `AUTOTUBE_HOST`（既定 `0.0.0.0`）・`AUTOTUBE_PORT`（既定 `8766`。8765 は phone-input が使う）。合言葉は既定では求めない（`?t=` なしで開ける）ので家の LAN の中だけで使う。求めるなら `AUTOTUBE_REQUIRE_TOKEN=1`（合言葉は phone-input の token と共通）
 
 ## しくみ
 1. 希望を `claude -p`（既定は haiku）に渡し、切り口を変えた検索ワードを 3 個考えてもらう（ライブを観たいのかも判断する）
