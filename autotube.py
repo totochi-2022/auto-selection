@@ -106,8 +106,8 @@ def ask_claude(prompt, web=False):
         return None
 
 
-def plan_search(request):
-    """希望から探し方を決めてもらう。
+def plan_search(request, music=False):
+    """希望から探し方を決めてもらう。music=True なら音楽として探す（リモコンの「音楽だけ」）。
     戻り値 {"kind": "music"|"channel"|"topic", "queries": [...], "live": bool, "channel": チャンネル名}"""
     obj = ask_claude(f"""次の希望に合う YouTube 動画を探します。まず、希望がどの種類かを判断してください。
 - "music"：曲名・歌手名・アーティスト名・アルバム名など、音楽を聴きたい希望
@@ -136,12 +136,16 @@ def plan_search(request):
 
 # 希望
 {request}
-
+{MUSIC_ONLY_NOTE if music else ""}
 また、希望が「今配信中のライブ・生配信・生中継」を観たいものかどうかも判断してください
 （過去の中継の解説やアーカイブ、音楽のライブ映像を観たいだけなら false）。
 
+最後に、外国語（日本語以外）で話している動画を観たい希望かどうかを判断してください（foreign）。
+「英語の」「海外の」「英語で」「洋楽のライブ映像」など、はっきり外国語・海外のものを求めているときだけ true。
+それ以外は false（ユーザーは基本的に日本語の動画を観たい）。
+
 次の JSON だけを1行で出力してください:
-{{"kind": "music" または "channel" または "topic", "channel": "channel のときだけチャンネル名（正しい表記）、それ以外は空", "keyword": true または false, "queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "live": true または false, "filters": {{"sort": "", "period": "", "min_views": null, "max_views": null, "min_minutes": null, "max_minutes": null}}}}""")
+{{"kind": "music" または "channel" または "topic", "channel": "channel のときだけチャンネル名（正しい表記）、それ以外は空", "keyword": true または false, "queries": ["検索ワード1", "検索ワード2", "検索ワード3"], "live": true または false, "foreign": true または false, "filters": {{"sort": "", "period": "", "min_views": null, "max_views": null, "min_minutes": null, "max_minutes": null}}}}""")
     obj = obj or {}
     qs = [q for q in obj.get("queries", []) if isinstance(q, str) and q.strip()][:3]
     # 単語の希望は、その言葉そのものでも探す（YouTube は単独なら表記の間違いを補正してくれるが、
@@ -149,11 +153,18 @@ def plan_search(request):
     if (obj.get("keyword") is not False or not qs) and len(request) <= 40 and request not in qs:
         qs.insert(0, request)
     kind = obj.get("kind") if obj.get("kind") in ("music", "channel", "topic") else "topic"
+    if music:
+        kind = "music"
     channel = str(obj.get("channel") or "").strip()
     if kind == "channel" and not channel:
         kind = "topic"
     return {"kind": kind, "queries": qs or [request], "live": obj.get("live") is True, "channel": channel,
-            "filters": clean_filters(obj.get("filters"))}
+            "filters": clean_filters(obj.get("filters")), "foreign": obj.get("foreign") is True}
+
+
+MUSIC_ONLY_NOTE = """（ユーザーは「音楽だけ」を選んでいます。kind は必ず "music" にし、曲そのものが聴ける検索ワードにしてください。
+ジャンル・雰囲気・作業用 BGM のような希望なら、「作業用」「BGM」「メドレー」「アルバム」「playlist」などの言葉を使ってかまいません）
+"""
 
 
 def clean_filters(f):
@@ -342,6 +353,71 @@ def gather(queries, *, normal=True, live=False, long=False, newest=False, exclud
     return cands
 
 
+YTM_SEARCH_URL = "https://music.youtube.com/search?q="
+RADIO_N = 40       # ラジオから取る曲数
+YTM_SEEDS = 2      # YouTube Music で選ぶとき、検索ワードごとにラジオの起点にする曲数
+
+
+def ytm_search(query, n=YTM_SEEDS):
+    """YouTube Music で曲を検索する（曲名と id だけ。アーティスト・長さは取れない）"""
+    r = subprocess.run(
+        ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--flat-playlist", "-J", "--playlist-end", str(n),
+         YTM_SEARCH_URL + urllib.parse.quote_plus(query) + "#songs"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"YouTube Music の検索に失敗: {r.stderr.strip()[-300:]}")
+    return [e for e in (json.loads(r.stdout).get("entries") or []) if e.get("id")]
+
+
+def radio_tracks(video_id, n=RADIO_N):
+    """その曲を起点にした YouTube のラジオ（似た曲の自動プレイリスト）。先頭は起点の曲そのもの"""
+    r = subprocess.run(
+        ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--flat-playlist", "-J", "--playlist-end", str(n),
+         f"https://www.youtube.com/watch?v={video_id}&list=RDAMVM{video_id}"],
+        capture_output=True, text=True, timeout=120,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ラジオの取得に失敗: {r.stderr.strip()[-300:]}")
+    return [e for e in (json.loads(r.stdout).get("entries") or [])
+            if e.get("id") and e.get("duration") and MIN_SEC <= e["duration"] <= MAX_SEC]
+
+
+def gather_radio(seeds, exclude=(), progress=None):
+    """起点の曲（id のリスト）ごとにラジオを取って、候補をまとめる（exclude の id と重複は除く）"""
+    cands, ids = [], set(exclude)
+    for k, seed in enumerate(seeds, 1):
+        if progress:
+            progress(k, len(seeds), seed, len(cands))
+        try:
+            found = radio_tracks(seed)
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            log(str(e))
+            continue
+        for c in found:
+            if c["id"] not in ids:
+                ids.add(c["id"])
+                cands.append(c)
+    return cands
+
+
+def gather_ytm(queries, exclude=(), progress=None):
+    """YouTube Music で選ぶ：検索ワードごとに YouTube Music で曲を探し、その曲のラジオから候補を集める。
+    progress(何回目, 全体, 説明, ここまでの候補数)"""
+    seeds = []
+    for k, q in enumerate(queries, 1):
+        if progress:
+            progress(k, len(queries), f"YouTube Music で「{q}」", 0)
+        log(f"YouTube Music で「{q}」を検索中…")
+        try:
+            seeds += [e for e in ytm_search(q) if e["id"] not in {s["id"] for s in seeds}]
+        except (RuntimeError, subprocess.TimeoutExpired) as e:
+            log(str(e))
+    return gather_radio([s["id"] for s in seeds], exclude=exclude,
+                        progress=progress and (lambda k, t, sid, c: progress(
+                            k, t, "ラジオ：" + next((s.get("title") or sid for s in seeds if s["id"] == sid), sid), c)))
+
+
 def channel_videos(channel_id, channel, queries=(), *, long=False, exclude=(), progress=None):
     """チャンネルの動画を集める：新しい順の最新分＋チャンネル内で検索ワードを検索した結果"""
     base = f"https://www.youtube.com/channel/{channel_id}"
@@ -377,7 +453,8 @@ def fmt_dur(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def choose(request, candidates, history, n=1, newest=False, channel=None, kind="topic", traits="", notes=None):
+def choose(request, candidates, history, n=1, newest=False, channel=None, kind="topic", traits="", notes=None,
+           japanese=False, radio=None):
     """Claude に n 本選ばせる（再生する順）。戻り値 [(候補, 理由), ...]"""
     n = min(n, len(candidates))
     recent = [h for h in history if h.get("event") == "played"][-10:]
@@ -398,9 +475,16 @@ def choose(request, candidates, history, n=1, newest=False, channel=None, kind="
     if notes:
         rule3 += ("\n6. 候補の一部には字幕（話している内容）の抜粋を付けた。構成がしっかりしていて中身が濃いものを選び、"
                   "同じ話の繰り返し・煽りばかり・中身の薄いものは避ける")
+    if japanese:
+        rule3 += ("\n7. 日本語で話している動画を選ぶ。海外のチャンネルの動画はタイトルが日本語に機械翻訳されていることがあるので、"
+                  "チャンネル名が外国語で、タイトルが翻訳調のものは避ける")
     if kind == "music" and not channel:
         rule3 += ("\n4. 音楽を聴きたい希望なので、曲そのものが聴ける動画（公式 MV・ライブ演奏・カバー・演奏してみた）を選ぶ。"
-                  "解説・リアクション・切り抜き・ランキング紹介は避ける。同じ曲の別の演奏や、同じアーティストの別の曲は可")
+                  "解説・リアクション・切り抜き・ランキング紹介は避ける。同じ曲の別の演奏や、同じアーティストの別の曲は可。"
+                  "作業用のメドレーやアルバム丸ごとの長い動画も可")
+    if radio:
+        rule3 += ("\n8. 候補は「" + radio + "」を起点にした YouTube のラジオ（似た曲を自動で並べたもの）。"
+                  "ジャンルや雰囲気が大きく外れた曲（ジャズの流れに急にポップスが入る、など）は避け、流れに合う曲を選ぶ")
     obj = ask_claude(f"""YouTube の動画を{n}本選んでください。テレビで流しっぱなしにして、選んだ順に観ます。
 
 # 今回の希望（最優先）
@@ -502,6 +586,90 @@ def choose_with_subs(request, candidates, history, n=5, progress=None, **kw):
     log(f"字幕が取れたのは {len(notes)} 本")
     report("choose", len(notes), len(targets))
     return choose(request, short, history, n=n, notes=notes, **kw)
+
+
+FOREIGN_CHANNELS = DATA / "foreign_channels.json"  # 日本語でないと分かったチャンネル（次から候補に入れない）
+LANG_PARALLEL = 4
+_lang_cache = {}
+
+
+def load_foreign_channels():
+    try:
+        return set(json.loads(FOREIGN_CHANNELS.read_text()))
+    except (OSError, ValueError):
+        return set()
+
+
+def save_foreign_channels(chs):
+    DATA.mkdir(exist_ok=True)
+    FOREIGN_CHANNELS.write_text(json.dumps(sorted(chs), ensure_ascii=False, indent=0))
+
+
+def has_japanese(text):
+    """ひらがな・カタカナ・漢字が入っているか"""
+    return any("\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff" for ch in text or "")
+
+
+def video_language(video_id):
+    """動画の言語（"ja"・"en-US" など）。検索結果のタイトルは日本語に機械翻訳されていることがあるので、
+    動画ページの情報（元の言語）で確かめる。分からなければ None"""
+    if video_id in _lang_cache:
+        return _lang_cache[video_id]
+    lang = None
+    try:
+        r = subprocess.run(
+            ["yt-dlp", "-J", "--skip-download", "--ignore-no-formats-error",
+             "--extractor-args", "youtube:lang=ja;player_skip=js,configs",
+             f"https://www.youtube.com/watch?v={video_id}"],
+            capture_output=True, text=True, timeout=60,
+        )
+        lang = json.loads(r.stdout).get("language") if r.returncode == 0 else None
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        pass
+    _lang_cache[video_id] = lang
+    return lang
+
+
+def is_japanese_lang(lang):
+    return lang is None or lang.split("-")[0] == "ja"
+
+
+def drop_known_foreign(candidates, n):
+    """前に日本語でないと分かったチャンネルと、タイトルに日本語が 1 文字もないものを外す
+    （外すと n 本に足りなくなるなら、タイトルでの判断はしない）"""
+    foreign = load_foreign_channels()
+    cands = [c for c in candidates if (c.get("channel") or "") not in foreign]
+    ja = [c for c in cands if has_japanese(c.get("title"))]
+    return ja if len(ja) >= n else cands
+
+
+def choose_japanese(request, candidates, history, n=1, chooser=None, **kw):
+    """日本語の動画だけを n 本選ぶ。選んだものの言語を確かめ、日本語でなければそのチャンネルを外して選び直す（最大 3 回）。
+    chooser は最初の 1 回に使う選び方（choose_with_subs など。省略時は choose）"""
+    pool = drop_known_foreign(candidates, n)
+    foreign = load_foreign_channels()
+    result = []
+    for rnd in range(3):
+        need = n - len(result)
+        if need <= 0 or not pool:
+            break
+        fn = chooser if (chooser and rnd == 0) else choose
+        if fn is choose:
+            kw.pop("progress", None)
+        picks = fn(request, pool, history, n=need, japanese=True, **kw)
+        with ThreadPoolExecutor(LANG_PARALLEL) as ex:
+            langs = dict(zip([c["id"] for c, _ in picks], ex.map(video_language, [c["id"] for c, _ in picks])))
+        for c, reason in picks:
+            if is_japanese_lang(langs.get(c["id"])):
+                result.append((c, reason))
+            else:
+                log(f"日本語ではない（{langs.get(c['id'])}）ので外します: {c.get('title')} ／ {c.get('channel')}")
+                if c.get("channel"):
+                    foreign.add(c["channel"])
+        picked = {c["id"] for c, _ in picks}
+        pool = [c for c in pool if c["id"] not in picked and (c.get("channel") or "") not in foreign]
+    save_foreign_channels(foreign)
+    return result
 
 
 def pick_next(request, queries, live):

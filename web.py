@@ -200,9 +200,11 @@ class App:
         self.version = 0
         self.gen = 0               # 希望を変えるたびに増やす（古い選定結果を捨てる）
         self.request = ""
-        self.opts = {"live": False, "long": False, "newest": False, "mode": "normal", "subs": False}
+        self.opts = {"live": False, "long": False, "newest": False, "mode": "normal", "subs": False,
+                     "music": False, "ytm": False}
         self.traits = ""           # 「似たもの」「ネットの記事から」で選ぶときの基準
         self.exclude_channel = ""  # 「似たもの」のお手本（候補から外す）
+        self.foreign = False       # 外国語の動画を観たい希望か（false なら日本語の動画だけを選ぶ）
         self.q720 = at.IS_WSL  # 画質を 720p までにする（WSL は CPU で描画するので既定でオン）
         self.queries, self.claude_live = [], False
         self.filters = {}          # 希望から読み取った絞り込み（並べ方・期間・再生数・長さ）
@@ -210,6 +212,7 @@ class App:
         self.queue, self.now = [], None
         self.dropped = set()       # キューから外した動画（このセッション中は選ばない）
         self.channel = None        # {"id", "name"}：気に入ったチャンネルからだけ選ぶモード
+        self.radio = None          # {"id", "title"}：その曲を起点にしたラジオ（似た曲）から選ぶモード
         self.picking = False
         self.play_on_fill = False  # キューが埋まったらすぐ再生する
         self.status = "希望を入力して「スタート」"
@@ -253,7 +256,7 @@ class App:
     def snapshot(self):
         with self.lock:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
-                    "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "now": self.now, "queue": self.queue,
+                    "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player}
 
     # ---- 選定 ----
@@ -264,13 +267,17 @@ class App:
         with self.lock:
             self.gen += 1
             self.request = request
-            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest", "subs")}
+            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest", "subs", "music", "ytm")}
+            if self.opts["ytm"]:
+                self.opts["music"] = True  # YouTube Music で選ぶなら音楽だけ
             self.opts["mode"] = opts.get("mode") if opts.get("mode") in ("normal", "similar", "web") else "normal"
             self.traits, self.exclude_channel = "", ""
+            self.foreign = False
             self.queries, self.claude_live = [], False
             self.kind = "topic"
             self.filters = {}
             self.channel = None
+            self.radio = None
             self.queue = []
             self.play_on_fill = True
             self.picking = False
@@ -301,9 +308,11 @@ class App:
                     plan = at.plan_web(request)
                 else:
                     done = self.ticking("探し方を考えています…")
-                    plan = at.plan_search(request)
+                    plan = at.plan_search(request, music=opts.get("music", False))
                 done()
                 queries, claude_live, kind, filters = plan["queries"], plan["live"], plan["kind"], plan["filters"]
+                if opts.get("music") and opts["mode"] != "normal":
+                    kind = "music"
                 if kind == "channel" and not channel:
                     # チャンネル名の希望：YouTube でチャンネルを探して「このチャンネル」モードにする
                     done = self.ticking(f"チャンネル「{plan['channel']}」を探しています…")
@@ -319,6 +328,7 @@ class App:
                     self.queries, self.claude_live, self.kind, self.filters = queries, claude_live, kind, filters
                     self.traits = plan.get("traits", "")
                     self.exclude_channel = plan.get("exclude_channel", "")
+                    self.foreign = plan.get("foreign", False)
                     if channel and not self.channel:
                         self.channel = channel
                 self.changed()
@@ -329,7 +339,20 @@ class App:
                 if self.now:
                     exclude.add(self.now["id"])
                 n = QUEUE_LEN - len(self.queue)
-            if channel:
+            with self.lock:
+                radio = self.radio
+                seed = (self.now or {}).get("id") if radio else None
+            if radio:
+                # ラジオ：起点の曲と、いま流れている曲（流れに合わせて少しずつ移っていく）のラジオから選ぶ
+                seeds = [radio["id"]] + ([seed] if seed and seed != radio["id"] else [])
+                cands = at.gather_radio(seeds, exclude=exclude, progress=lambda k, t, sid, c: self.set_status(
+                    f"ラジオの曲を集めています {k}/{t}（候補 {c} 本）"))
+                kind = "music"
+            elif opts.get("ytm"):
+                cands = at.gather_ytm(queries, exclude=exclude, progress=lambda k, t, q, c: self.set_status(
+                    f"{q} {k}/{t}（候補 {c} 本）"))
+                kind = "music"
+            elif channel:
                 cands = at.channel_videos(
                     channel["id"], channel["name"], queries, long=opts["long"], exclude=exclude,
                     progress=lambda k, t, q, c: self.set_status(
@@ -341,7 +364,7 @@ class App:
                                   progress=lambda k, t, q, c: self.set_status(
                                       f"YouTube を検索中 {k}/{t}：「{q}」（候補 {c} 本）"))
             with self.lock:
-                traits, ref = self.traits, self.exclude_channel
+                traits, ref, foreign = self.traits, self.exclude_channel, self.foreign
             if ref:  # 「似たもの」：お手本のチャンネル自身は外す
                 key = ref.replace(" ", "").lower()
                 cands = [c for c in cands if key not in (c.get("channel") or "").replace(" ", "").lower()]
@@ -350,7 +373,10 @@ class App:
             if not cands:
                 self.set_status("観ていない候補が見つかりませんでした。希望を変えてみてください")
                 return
-            kw = dict(newest=opts["newest"], channel=channel and channel["name"], kind=kind, traits=traits)
+            kw = dict(newest=opts["newest"], channel=channel and channel["name"], kind=kind, traits=traits,
+                      radio=radio and radio["title"])
+            # 日本語の動画だけにする（外国語の希望・音楽・チャンネル指定のときはしない）。選んだ後に言語を確かめる
+            japanese = not foreign and kind != "music" and not channel
             if opts["subs"]:
                 stopper = [lambda: None]
 
@@ -364,13 +390,20 @@ class App:
                     else:
                         stopper[0] = self.ticking(f"【3/3】字幕が取れた {k}/{total} 本を読んで {n} 本選んでいます…")
                 try:
-                    picks = at.choose_with_subs(request, cands, history, n=n, progress=progress, **kw)
+                    if japanese:
+                        picks = at.choose_japanese(request, cands, history, n=n, chooser=at.choose_with_subs,
+                                                   progress=progress, **kw)
+                    else:
+                        picks = at.choose_with_subs(request, cands, history, n=n, progress=progress, **kw)
                 finally:
                     stopper[0]()
             else:
                 done = self.ticking(f"候補 {len(cands)} 本から Claude が {n} 本選んでいます…")
                 try:
-                    picks = at.choose(request, cands, history, n=n, **kw)
+                    if japanese:
+                        picks = at.choose_japanese(request, cands, history, n=n, **kw)
+                    else:
+                        picks = at.choose(request, cands, history, n=n, **kw)
                 finally:
                     done()
             with self.lock:
@@ -538,6 +571,7 @@ class App:
                     on = None
                 else:
                     self.channel = {"id": now["channel_id"], "name": now.get("channel") or "?"}
+                    self.radio = None
             elif self.channel:
                 self.channel = None
             else:
@@ -557,6 +591,32 @@ class App:
                 at.append_history({"event": "good", "ts": int(time.time()), "id": video["id"],
                                    "title": video["title"], "channel": video.get("channel"),
                                    "request": request})
+            self.refill()
+
+    def set_radio(self, on):
+        """今の曲を起点にしたラジオ（似た曲）から次の候補を選ぶ（on=False で普通の選び方に戻す）"""
+        with self.lock:
+            now = self.now
+            if on:
+                if not now:
+                    on = None
+                else:
+                    self.radio = {"id": now["id"], "title": now.get("title") or "?"}
+                    self.channel = None
+            elif self.radio:
+                self.radio = None
+            else:
+                on = None
+            if on is not None:
+                self.gen += 1
+                self.queue = []
+                self.picking = False
+                self.status = (f"「{self.radio['title']}」のラジオから選び直します" if on
+                               else "普通の選び方に戻しました")
+        self.changed()
+        if on is not None:
+            if on:
+                self.mpv.command("show-text", "📻 この曲のラジオから選びます")
             self.refill()
 
     def quit_player(self):
@@ -745,6 +805,7 @@ ACTIONS = {
     "max": lambda b: app.toggle_max(),
     "rate": lambda b: app.rate(b.get("ev")),
     "channel": lambda b: app.set_channel(bool(b.get("on"))),
+    "radio": lambda b: app.set_radio(bool(b.get("on"))),
     "q720": lambda b: app.set_q720(b.get("on")),
 }
 

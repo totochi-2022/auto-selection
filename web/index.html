@@ -53,7 +53,7 @@
   .progress { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .bar { flex: 1; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; cursor: pointer; }
   .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .4s linear; }
-  .controls { display: grid; grid-template-columns: repeat(9, 1fr); gap: 8px; margin-top: 12px; }
+  .controls { display: grid; grid-template-columns: repeat(10, 1fr); gap: 8px; margin-top: 12px; }
   button {
     font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
     border-radius: 10px; padding: 10px 6px; cursor: pointer; min-height: 44px;
@@ -152,6 +152,7 @@
       <button data-act="max" id="maxBtn" title="最大化の切り替え">⛶<small>最大化</small></button>
       <button data-act="rate" data-ev="good" title="好き">👍<small>好き</small></button>
       <button data-act="rate" data-ev="bad" title="いまいち">👎<small>いまいち</small></button>
+      <button data-act="radio" id="radioBtn" title="この曲を起点にしたラジオ（似た曲を自動で並べたもの）から次を選ぶ">📻<small>ラジオ</small></button>
       <button data-act="channel" id="chBtn" title="気に入ったら：次の候補をこの動画のチャンネルから選ぶ">📺<small>このチャンネル</small></button>
       <button data-act="browser" title="この動画を YouTube のページで開く（コメント・概要欄を見る）。mpv は一時停止">💬<small>YouTube で開く</small></button>
     </div>
@@ -181,6 +182,8 @@
             <option value="web">ネットの記事から（遅い）</option>
           </select></label>
         <label title="候補 20 本の字幕を読ませて、中身のしっかりした動画を選ぶ"><input type="checkbox" id="optSubs"> 字幕を読んで選ぶ（遅い）</label>
+        <label title="曲そのものが聴ける動画だけを選ぶ（解説・リアクションは外す）。作業用 BGM・メドレーも可"><input type="checkbox" id="optMusic"> 🎵 音楽だけ</label>
+        <label title="YouTube Music で曲を探し、その曲のラジオ（似た曲）から選ぶ。音楽だけになる"><input type="checkbox" id="optYtm"> YouTube Music で選ぶ</label>
       </div>
       <div class="queries" id="queries"></div>
       <button class="primary" type="submit">スタート</button>
@@ -266,8 +269,14 @@ function render(s) {
   $("chBtn").querySelector("small").textContent = ch ? "解除" : "このチャンネル";
   $("chBtn").dataset.on = ch ? "0" : "1";
   if (ch) $("chBtn").disabled = false;  // 停止中でも解除はできるように
-  $("chmode").textContent = ch ? `📺 チャンネル「${ch.name}」から選んでいます` : "";
-  $("chmode").style.display = ch ? "" : "none";
+  const rd = s.radio;
+  $("radioBtn").classList.toggle("on", !!rd);
+  $("radioBtn").querySelector("small").textContent = rd ? "解除" : "ラジオ";
+  $("radioBtn").dataset.on = rd ? "0" : "1";
+  if (rd) $("radioBtn").disabled = false;
+  $("chmode").textContent = ch ? `📺 チャンネル「${ch.name}」から選んでいます`
+    : rd ? `📻 「${rd.title}」のラジオから選んでいます` : "";
+  $("chmode").style.display = ch || rd ? "" : "none";
 
   if (!formTouched) {
     $("request").value = s.request;
@@ -276,9 +285,12 @@ function render(s) {
     $("optNewest").checked = s.opts.newest;
     $("optMode").value = s.opts.mode || "normal";
     $("optSubs").checked = !!s.opts.subs;
+    $("optMusic").checked = !!s.opts.music;
+    $("optYtm").checked = !!s.opts.ytm;
   }
   $("queries").textContent = s.queries.length
-    ? ({ music: "🎵 音楽として探しています　", channel: "📺 チャンネルから探しています　" }[s.kind] || "")
+    ? (s.opts.ytm ? "🎵 YouTube Music で探しています　"
+       : { music: "🎵 音楽として探しています　", channel: "📺 チャンネルから探しています　" }[s.kind] || "")
       + (s.filters ? "【" + s.filters + "】 " : "")
       + (s.traits ? "（基準: " + s.traits + "） " : "")
       + "検索ワード: " + s.queries.join(" / ") + (s.claude_live && !s.opts.live ? "（Claude の判断でライブも含む）" : "")
@@ -335,7 +347,11 @@ $("vol").addEventListener("change", () => {
 
 $("optQ720").addEventListener("change", (e) => api("q720", { on: e.target.checked }));
 
-for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs"]) {
+// YouTube Music で選ぶなら音楽だけ
+$("optYtm").addEventListener("change", (e) => { if (e.target.checked) $("optMusic").checked = true; });
+$("optMusic").addEventListener("change", (e) => { if (!e.target.checked) $("optYtm").checked = false; });
+
+for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs", "optMusic", "optYtm"]) {
   $(id).addEventListener("input", () => { formTouched = true; });
 }
 
@@ -345,7 +361,8 @@ $("form").addEventListener("submit", (e) => {
   if (!request) return $("request").focus();
   formTouched = false;
   api("start", { request, opts: { live: $("optLive").checked, long: $("optLong").checked, newest: $("optNewest").checked,
-                          mode: $("optMode").value, subs: $("optSubs").checked } });
+                          mode: $("optMode").value, subs: $("optSubs").checked,
+                          music: $("optMusic").checked, ytm: $("optYtm").checked } });
 });
 $("request").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("form").requestSubmit();
