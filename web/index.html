@@ -204,6 +204,19 @@
     <ol id="queue"></ol>
     <div id="queueEmpty" class="empty">まだありません</div>
   </section>
+
+  <section>
+    <h2>テレビに送る</h2>
+    <form id="castForm" class="opts" autocomplete="off">
+      <input id="castUrl" type="url" placeholder="動画のページの URL を貼る（YouTube 以外も可）" style="flex:1;min-width:12em">
+      <button class="primary" type="submit">📺 送る</button>
+    </form>
+    <p class="empty" style="text-align:left">
+      mpv で再生できないサイト（Netflix など）は、テレビの Brave でページを開きます。<br>
+      PC のブラウザ用：このリンクをブックマークバーへドラッグ →
+      <a id="bookmarklet" href="#" title="動画のページで押すと、今の再生位置からテレビで続きを再生">📺 テレビで見る</a>
+    </p>
+  </section>
 </main>
 
 <script>
@@ -220,8 +233,21 @@ const fmt = (sec) => {
   return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0");
 };
 const dur = (sec) => sec ? fmt(sec) : '<span class="live">● ライブ</span>';
-const thumb = (id) => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
+const thumb = (id) => String(id).startsWith("cast:") ? "data:image/gif;base64,R0lGODlhAQABAAAAACw="  // YouTube 以外の送られた動画
+  : `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// テレビに送る：URL を貼って送る／PC 用のブックマークレット（ページの動画を一時停止して、再生位置ごと送る）
+$("castForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const url = $("castUrl").value.trim();
+  if (!url) return $("castUrl").focus();
+  api("cast", { url });
+  $("castUrl").value = "";
+});
+$("bookmarklet").href = "javascript:(()=>{const v=document.querySelector('video');const t=v?Math.floor(v.currentTime):0;"
+  + "if(v)v.pause();window.open('" + location.origin + "/cast?url='+encodeURIComponent(location.href)+'&t='+t,"
+  + "'tv','width=360,height=200')})()";
 
 async function api(name, body = {}) {
   try {

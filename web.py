@@ -10,6 +10,7 @@ mpv は 1 つを常駐させ、JSON IPC（--input-ipc-server）で動画の切�
 mpv が応答しなくなったら（見張り役が数秒ごとに確認）、強制終了して同じ動画を同じ位置から再開する。
 """
 import json
+import re
 import os
 import secrets
 import signal
@@ -447,7 +448,10 @@ class App:
         self.mpv.ensure(maximized)
         self.mpv.command("set_property", "force-media-title", video["title"])
         self.mpv.command("set_property", "ytdl-format", at.ytdl_format(720 if self.q720 else None))
-        url = f"https://www.youtube.com/watch?v={video['id']}"
+        # 「テレビに送る」の動画はページの URL をそのまま。ログインが要るサイトは Brave の cookie を使う
+        self.mpv.command("set_property", "ytdl-raw-options",
+                         "cookies-from-browser=brave" if video.get("cookies") else "")
+        url = video.get("url") or f"https://www.youtube.com/watch?v={video['id']}"
         if start > 5:
             self.mpv.command("loadfile", url, "replace", -1, f"start={int(start)}")
         else:
@@ -640,6 +644,11 @@ class App:
             self.set_status("再生中の動画がありません")
             return
         url = f"https://www.youtube.com/watch?v={video['id']}" + (f"&t={pos}s" if pos > 0 else "")
+        if self.open_url(url):
+            self.set_status("Brave で開きました（動画は一時停止中。F7 で戻れます）")
+
+    def open_url(self, url, full=False):
+        """URL を Brave で開いて前に出す（mpv は一時停止）。full なら Brave を全画面に（F8 で戻せる）。開けたら True"""
         self.mpv.command("set_property", "pause", True)
         if at.IS_WSL:
             cmd = ["cmd.exe", "/c", "start", "", url]
@@ -651,12 +660,91 @@ class App:
                              stderr=subprocess.DEVNULL, start_new_session=True, env=at.mpv_env())
         except OSError as e:
             self.set_status(f"ブラウザを開けませんでした：{e}")
-            return
+            return False
         if not at.IS_WSL and shutil.which("wlrctl"):
             time.sleep(1.5)  # タブが開いてから Brave を前に出す
             subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=at.mpv_env())
-        self.set_status("Brave で開きました（動画は一時停止中。F7 で戻れます）")
+            if full:
+                subprocess.run(["wlrctl", "toplevel", "fullscreen", "app_id:brave-browser", "state:active"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=at.mpv_env())
+                threading.Thread(target=self._video_fullscreen, daemon=True).start()
+        return True
+
+    UKEY = Path.home() / ".local/bin/ukey"  # 本物と同じキー番号でキーを押す（tonzura だけにある）
+    FULL_WAIT = 6  # ページが読み込まれるのを待つ秒数
+
+    def _video_fullscreen(self):
+        """ページが読み込まれたころに F9 を押して、Brave の拡張機能「テレビで全画面」に動画を全画面にさせる"""
+        if not self.UKEY.exists():
+            return
+        time.sleep(self.FULL_WAIT)
+        env = at.mpv_env()
+        if subprocess.run(["wlrctl", "toplevel", "find", "app_id:brave-browser", "state:active"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env).returncode != 0:
+            return  # その間にほかの窓に移っていたら押さない
+        subprocess.run([str(self.UKEY), "f9"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+
+    # ---- テレビに送る（別の PC・スマホで見ていた動画を、この PC で続きから再生） ----
+    YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/)|youtu\.be/)([\w-]{11})")
+
+    def cast(self, url, start=0):
+        """mpv（yt-dlp）で再生できればそうし、できなければ Brave でページを開く"""
+        url = (url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            self.set_status("送られた URL が正しくありません")
+            return
+        start = max(0, int(float(start or 0)))
+        self.set_status("送られた動画を調べています…")
+        m = self.YT_ID.search(url)
+        if m:  # YouTube はいつもどおり（タイトルだけ取る）
+            info = self._probe(f"https://www.youtube.com/watch?v={m.group(1)}", False)
+            video = {"id": m.group(1), "title": (info or {}).get("title") or "送られた動画",
+                     "duration": (info or {}).get("duration") or 0, "channel": (info or {}).get("channel")}
+        else:
+            cookies = False
+            info = self._probe(url, False)
+            if not info:
+                cookies, info = True, self._probe(url, True)  # ログインが要るサイトかもしれない
+            if not info:
+                self.set_status("mpv では再生できないサイトなので、Brave で開きます")
+                if self.open_url(url, full=True):
+                    self.set_status("mpv では再生できないので Brave で開きました（再生ボタンは画面で押してください。全画面は F8 で戻せます）")
+                return
+            video = {"id": f"cast:{info.get('extractor_key', '')}:{info.get('id', '')}", "url": url,
+                     "title": info.get("title") or url, "duration": info.get("duration") or 0,
+                     "channel": info.get("uploader") or info.get("extractor_key"), "cookies": cookies}
+        video["cast"] = True
+        video["reason"] = "ほかの端末から送られた動画"
+        try:
+            self._load(video, start=start)
+        except RuntimeError as e:
+            self.set_status(str(e))
+            return
+        with self.lock:
+            self.now = video
+            self.play_on_fill = False
+            self.player.update(pos=start, dur=video["duration"], running=True)
+            self.loading = True
+            self.status = f"送られた「{video['title'][:40]}」を読み込んでいます…"
+            self.progress_at, self.stalls = time.time(), 0
+        self.changed()
+
+    @staticmethod
+    def _probe(url, cookies):
+        """yt-dlp で再生できるか調べる。できればタイトルなどを返す"""
+        cmd = ["yt-dlp", "-J", "--no-playlist", "--skip-download", "--no-warnings", "-q",
+               "--extractor-args", "youtube:lang=ja"]
+        if cookies:
+            cmd += ["--cookies-from-browser", "brave"]
+        try:
+            r = subprocess.run(cmd + [url], capture_output=True, text=True, timeout=40)
+            info = json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return None
+        if not info or not (info.get("formats") or info.get("url")):
+            return None
+        return info
 
     def stop(self):
         with self.lock:
@@ -764,6 +852,13 @@ class App:
             reason = ev.get("reason")
             if reason == "eof":
                 self.next()
+            elif reason == "error" and (self.now or {}).get("cast") and (self.now or {}).get("url"):
+                url = self.now["url"]
+                with self.lock:  # mpv では何も再生していないので「再生中」を空にする
+                    self.now = None
+                    self.player.update(pos=0, dur=0)
+                self.set_status("mpv で再生できなかったので Brave で開きました（再生ボタンは画面で押してください）")
+                threading.Thread(target=self.open_url, args=(url, True), daemon=True).start()
             elif reason == "error":
                 self.errors += 1
                 if self.errors >= MAX_ERRORS:
@@ -810,7 +905,13 @@ ACTIONS = {
     "channel": lambda b: app.set_channel(bool(b.get("on"))),
     "radio": lambda b: app.set_radio(bool(b.get("on"))),
     "q720": lambda b: app.set_q720(b.get("on")),
+    "cast": lambda b: app.cast(b.get("url", ""), b.get("t", 0)),
 }
+
+CAST_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>テレビに送りました</title><body style="font:16px sans-serif;padding:16px">
+<p>📺 テレビに送りました。</p><p><small>この窓は閉じて大丈夫です</small></p>
+<script>setTimeout(() => window.close(), 1500)</script>"""
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -843,6 +944,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(app.snapshot(), ensure_ascii=False))
         elif path == "/events":
             self._events()
+        elif path == "/cast":  # ブックマークレットから開く：/cast?url=…&t=秒
+            q = parse_qs(urlparse(self.path).query)
+            threading.Thread(target=app.cast, args=(q.get("url", [""])[0], q.get("t", ["0"])[0]),
+                             daemon=True).start()
+            self._send(200, CAST_PAGE, "text/html; charset=utf-8")
         else:
             self._send(404, '{"error":"not found"}')
 
