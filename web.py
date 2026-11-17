@@ -9,7 +9,9 @@ mpv は 1 つを常駐させ、JSON IPC（--input-ipc-server）で動画の切�
 次に流す動画は Claude に 5 本まとめて選んでもらい、キューに積んでおく。
 mpv が応答しなくなったら（見張り役が数秒ごとに確認）、強制終了して同じ動画を同じ位置から再開する。
 """
+import hashlib
 import json
+import mimetypes
 import re
 import os
 import secrets
@@ -197,6 +199,78 @@ class Mpv:
             self.on_event({"event": "mpv-exit"})
 
 
+# ---- ブラウザで再生するモード（/player）----
+# mpv の代わりに、yt-dlp で落としたファイルを Brave の <video> で再生する。左に動画・右に次の曲の一覧のページ。
+# Brave が GPU で再生できる VP9（webm）を優先、だめなら H.264（mp4）。テレビが 1080p なので 1080p まで（AV1 は GPU で再生できないので選ばない）
+MEDIA_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "autotube" / "media"
+WEB_FORMAT = ("bv*[height<=1080][ext=webm][vcodec^=vp]+ba[ext=webm]"
+              "/bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4][height<=1080]/b")
+
+
+def media_key(video):
+    """ファイル名に使う名前。YouTube は動画の ID、それ以外（テレビに送る）は URL から作る"""
+    vid = video.get("id") or ""
+    if re.fullmatch(r"[\w-]{6,20}", vid) and not video.get("url"):
+        return vid
+    return "u" + hashlib.sha1((video.get("url") or vid).encode()).hexdigest()[:12]
+
+
+class Media:
+    """動画ファイルを先に落としておく係。状態は key -> loading / ready / error"""
+
+    def __init__(self, on_change):
+        self.on_change = on_change
+        self.lock = threading.Lock()
+        self.state = {}
+        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        for f in MEDIA_DIR.iterdir():  # 前回の起動の残り（途中で止まったものも）は消す
+            f.unlink(missing_ok=True)
+
+    def path(self, key):
+        if not re.fullmatch(r"[\w-]+", key):
+            return None
+        for f in MEDIA_DIR.glob(f"{key}.*"):
+            if f.suffix in (".webm", ".mp4") and ".part" not in f.name and ".f" not in f.stem[len(key):]:
+                return f
+        return None
+
+    def fetch(self, video):
+        key = media_key(video)
+        with self.lock:
+            if self.state.get(key) in ("loading", "ready"):
+                return
+            self.state[key] = "loading"
+        self.on_change()
+        threading.Thread(target=self._run, args=(video, key), daemon=True).start()
+
+    def _run(self, video, key):
+        url = video.get("url") or f"https://www.youtube.com/watch?v={video['id']}"
+        cmd = ["yt-dlp", "--extractor-args", "youtube:lang=ja", "--no-playlist", "-q", "--no-warnings",
+               "-f", WEB_FORMAT, "-o", str(MEDIA_DIR / f"{key}.%(ext)s")]
+        if video.get("cookies"):
+            cmd += ["--cookies-from-browser", "brave"]
+        t0 = time.time()
+        r = subprocess.run(cmd + ["--", url], capture_output=True, text=True)
+        ok = r.returncode == 0 and self.path(key) is not None
+        log(f"ブラウザ用に落とした: {key} {'OK' if ok else 'NG'}（{int(time.time() - t0)} 秒）"
+            + ("" if ok else f" {r.stderr.strip()[-300:]}"))
+        with self.lock:
+            self.state[key] = "ready" if ok else "error"
+        self.on_change()
+
+    def keep_only(self, keys):
+        """keys 以外のファイルを消す（見終わった動画・キューから外れた動画）"""
+        with self.lock:
+            for k in list(self.state):
+                if k not in keys and self.state[k] != "loading":
+                    del self.state[k]
+            loading = {k for k, v in self.state.items() if v == "loading"}
+        for f in MEDIA_DIR.iterdir():
+            k = f.name.split(".")[0]
+            if k not in keys and k not in loading:
+                f.unlink(missing_ok=True)
+
+
 class App:
     def __init__(self):
         self.lock = threading.RLock()
@@ -226,6 +300,8 @@ class App:
         self.progress_at = time.time()  # 最後に再生位置が進んだ時刻
         self.stalls = 0                 # 今の動画で読み込み直した回数
         self.mpv = Mpv(self.on_mpv_event)
+        self.web = False           # ブラウザで再生するモード（/player のページを開くとオン）
+        self.media = Media(self.changed)
         # mpv の起動し直しを同時に 2 つ走らせない（走ると古い mpv が止められずに残り、画面に映り続ける）
         self.load_lock = threading.Lock()
 
@@ -261,7 +337,19 @@ class App:
         with self.lock:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
                     "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
-                    "picking": self.picking, "status": self.status, "player": self.player}
+                    "picking": self.picking, "status": self.status, "player": self.player,
+                    "web": self.web, "media": self._media_snapshot()}
+
+    def _media_snapshot(self):
+        """ブラウザで再生するモードの、今とキューの動画のファイルの状態（key -> 状態）"""
+        if not self.web:
+            return {}
+        out = {}
+        for v in ([self.now] if self.now else []) + self.queue:
+            k = media_key(v)
+            v["key"] = k
+            out[k] = self.media.state.get(k, "")
+        return out
 
     # ---- 選定 ----
     def start(self, request, opts):
@@ -468,6 +556,8 @@ class App:
         threading.Timer(1.0, self.mpv.command, ("set_property", "ontop", False)).start()
 
     def play(self, video):
+        if self.web:
+            return self._play_web(video)
         self.set_status(f"「{video['title'][:40]}」を読み込んでいます…")
         try:
             self._load(video, restart=RESTART_PER_VIDEO)
@@ -487,6 +577,59 @@ class App:
                            "request": request, "reason": video.get("reason")})
         self.changed()
         self.refill()
+
+    def _play_web(self, video):
+        """ブラウザで再生するモード：ファイルを落とし始め（済んでいればすぐ）、ページに知らせる。次の 1 本も先に落とす"""
+        with self.lock:
+            self.now = video
+            self.play_on_fill = False
+            self.player.update(pos=0, dur=video.get("duration") or 0, running=True, paused=False)
+            self.status = f"「{video['title'][:40]}」"
+            request = self.request
+        at.append_history({"event": "played", "ts": int(time.time()), "id": video["id"],
+                           "title": video["title"], "channel": video.get("channel"),
+                           "request": request, "reason": video.get("reason")})
+        self.media.fetch(video)
+        self._prefetch()
+        self.changed()
+        self.refill()
+
+    def _prefetch(self):
+        """キューの先頭を先に落としておき、今・先頭以外のファイルは消す"""
+        with self.lock:
+            keep = ([self.now] if self.now else []) + self.queue[:1]
+        for v in keep[1:] if self.now else keep:
+            self.media.fetch(v)
+        self.media.keep_only({media_key(v) for v in keep})
+
+    def set_web(self, on):
+        """ブラウザで再生するモードの切り替え。オンにすると mpv は止める。オフにすると今の動画を mpv で頭から"""
+        with self.lock:
+            if self.web == on:
+                return
+            self.web = on
+            now = self.now
+        if on:
+            self.mpv.kill()
+            if now:
+                self._play_web(now)
+            else:
+                self._prefetch()
+        else:
+            self.media.keep_only(set())
+            if now:
+                self.play(now)
+        self.set_status("ブラウザで再生します（/player）" if on else "mpv で再生します")
+
+    def web_pos(self, b):
+        """ページの <video> の再生位置（リモコンの表示用。2 秒ごとに来る）"""
+        with self.lock:
+            if not self.web:
+                return
+            self.player.update(pos=float(b.get("pos") or 0), dur=float(b.get("dur") or 0),
+                               paused=bool(b.get("paused")), muted=bool(b.get("muted")),
+                               volume=round(float(b.get("volume") or 0) * 100))
+        self.changed()
 
     def _handle_stall(self, video, pos):
         """再生位置が進まないとき：読み込み直す。何度やってもだめなら次の動画へ"""
@@ -513,6 +656,8 @@ class App:
         while True:
             time.sleep(WATCH_INTERVAL)
             with self.lock:
+                if self.web:  # ブラウザで再生中は mpv を見張らない
+                    continue
                 video, pos = self.now, self.player["pos"]
                 stalled = (video is not None and not self.player["paused"]
                            and time.time() - self.progress_at > STALL_SEC)
@@ -555,6 +700,8 @@ class App:
             if not 0 <= i < len(self.queue):
                 return
             self.dropped.add(self.queue.pop(i)["id"])
+        if self.web:
+            self._prefetch()
         self.changed()
         self.refill()
 
@@ -819,6 +966,8 @@ class App:
     # ---- mpv からのイベント ----
     def on_mpv_event(self, ev):
         name = ev.get("event")
+        if self.web:  # ブラウザで再生中は、止めた mpv からの知らせを無視する
+            return
         if name == "property-change":
             key, val = ev.get("name"), ev.get("data")
             with self.lock:
@@ -906,6 +1055,8 @@ ACTIONS = {
     "radio": lambda b: app.set_radio(bool(b.get("on"))),
     "q720": lambda b: app.set_q720(b.get("on")),
     "cast": lambda b: app.cast(b.get("url", ""), b.get("t", 0)),
+    "web": lambda b: app.set_web(bool(b.get("on"))),
+    "webpos": lambda b: app.web_pos(b),
 }
 
 CAST_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -940,6 +1091,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "合言葉（?t=）が違います", "text/plain; charset=utf-8")
         if path in ("/", "/index.html"):
             self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+        elif path == "/player":
+            self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
+        elif path.startswith("/media/"):
+            self._media(path.removeprefix("/media/"))
         elif path == "/api/state":
             self._send(200, json.dumps(app.snapshot(), ensure_ascii=False))
         elif path == "/events":
@@ -966,6 +1121,46 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as e:
             return self._send(400, json.dumps({"error": str(e)}))
         self._send(200, '{"ok":true}')
+
+    def _media(self, key):
+        """ブラウザで再生する動画ファイルを配る。シークのために部分の取得（Range）に対応"""
+        f = app.media.path(key)
+        if not f:
+            return self._send(404, '{"error":"not found"}')
+        size = f.stat().st_size
+        start, end, code = 0, size - 1, 200
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", (self.headers.get("Range") or "").split(",")[0].strip())
+        if m and (m[1] or m[2]):
+            if m[1]:
+                start, end = int(m[1]), int(m[2]) if m[2] else size - 1
+            else:
+                start = max(0, size - int(m[2]))
+            end = min(end, size - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            code = 206
+        self.send_response(code)
+        self.send_header("Content-Type", mimetypes.guess_type(f.name)[0] or "video/webm")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        try:
+            with f.open("rb") as fp:
+                fp.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = fp.read(min(1 << 18, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _events(self):
         """Server-Sent Events で状態が変わるたびに送る"""
