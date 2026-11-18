@@ -339,7 +339,8 @@ class App:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
                     "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player,
-                    "web": self.web, "media": self._media_snapshot(), "ctl": self.ctl}
+                    "web": self.web, "media": self._media_snapshot(), "ctl": self.ctl,
+                    "can_show": self.WIN_FOCUS.exists()}
 
     def _media_snapshot(self):
         """ブラウザで再生するモードの、今とキューの動画のファイルの状態（key -> 状態）"""
@@ -820,6 +821,13 @@ class App:
         return True
 
     UKEY = Path.home() / ".local/bin/ukey"  # 本物と同じキー番号でキーを押す（tonzura だけにある）
+    WIN_FOCUS = Path.home() / ".local/bin/win-focus"  # 窓・タブを前に出す（tonzura だけにある。F7＋M と同じ）
+
+    def show_video(self):
+        """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）"""
+        if self.WIN_FOCUS.exists():
+            subprocess.run([str(self.WIN_FOCUS), "mpv"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           env=at.mpv_env())
     FULL_WAIT = 6  # ページが読み込まれるのを待つ秒数
 
     def _video_fullscreen(self):
@@ -1060,6 +1068,7 @@ ACTIONS = {
     "stop": lambda b: app.stop(),
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
+    "show": lambda b: app.show_video(),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),

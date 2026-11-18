@@ -145,6 +145,7 @@
       <span id="dur">0:00</span>
     </div>
     <div class="controls">
+      <button data-act="show" id="showBtn" hidden title="テレビの画面を動画（mpv かプレーヤーのタブ）に切り替える">📺<small>動画を前に</small></button>
       <button data-act="seek" data-sec="-30" title="30秒戻る">⏪<small>-30秒</small></button>
       <button data-act="pause" id="pauseBtn" title="一時停止 / 再生">⏯<small>一時停止</small></button>
       <button data-act="next" title="次の動画へ">⏭<small>次へ</small></button>
@@ -275,6 +276,7 @@ function render(s) {
       ${n.reason ? `<div class="reason">💬 ${esc(n.reason)}</div>` : ""}
     </div>` : (s.picking ? "選んでいます…" : "まだ何も再生していません");
 
+  $("showBtn").hidden = !s.can_show;
   const p = s.player;
   $("pos").textContent = fmt(p.pos);
   $("dur").textContent = p.dur ? fmt(p.dur) : (n && !n.duration ? "ライブ" : "0:00");
