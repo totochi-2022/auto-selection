@@ -127,8 +127,6 @@
     .controls button { font-size: 16px; padding: 6px 2px; min-height: 38px; }
     li { grid-template-columns: 88px 1fr auto; }
   }
-  .bmlink { display: block; text-align: center; padding: 12px; border-radius: 10px; background: var(--panel2);
-    border: 1px solid var(--line); color: var(--text); text-decoration: none; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -170,9 +168,6 @@
     </div>
   </section>
 
-  <section id="bmSec" hidden>
-    <a class="bmlink" id="bmLink" href="/bookmarks">🔖 ブックマーク（テレビの Brave で開く）</a>
-  </section>
 
   <section>
     <h2>観たいもの</h2>
@@ -255,12 +250,6 @@ $("castForm").addEventListener("submit", (e) => {
 $("bookmarklet").href = "javascript:(()=>{const v=document.querySelector('video');const t=v?Math.floor(v.currentTime):0;"
   + "if(v)v.pause();window.open('" + location.origin + "/cast?url='+encodeURIComponent(location.href)+'&t='+t,"
   + "'tv','width=360,height=200')})()";
-
-// ブックマーク：別ページ（/bookmarks）へ。ブックマークがある PC（Brave のある tonzura）だけ出す
-fetch("/api/bookmarks", { headers: { "X-Token": token } }).then((r) => r.json()).then((items) => {
-  $("bmSec").hidden = !items.length;
-  if (token) $("bmLink").href = "/bookmarks?t=" + encodeURIComponent(token);
-}).catch(() => {});
 
 async function api(name, body = {}) {
   try {
