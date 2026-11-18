@@ -1194,6 +1194,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, "合言葉（?t=）が違います", "text/plain; charset=utf-8")
         if path in ("/", "/index.html"):
             self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+        elif path == "/bookmarks":
+            self._send(200, (WEB_DIR / "bookmarks.html").read_bytes(), "text/html; charset=utf-8")
         elif path == "/player":
             self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/media/"):

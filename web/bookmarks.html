@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>ブックマーク</title>
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f26; --panel2: #222933; --line: #2e3742;
+    --text: #e8ecf1; --muted: #8d99a8; --accent: #4fa3ff; --accent-ink: #06121f;
+    --good: #3ecf8e; --bad: #ff6b6b; --radius: 12px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f6f9; --panel: #ffffff; --panel2: #eef1f5; --line: #d9dee5;
+      --text: #18202a; --muted: #5d6b7c; --accent: #1f6fd1; --accent-ink: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; -webkit-tap-highlight-color: transparent; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px 16px 40px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  header a { color: var(--accent); text-decoration: none; }
+  .msg { color: var(--muted); font-size: 13px; min-height: 1.5em; margin-top: 10px; }
+  /* ブックマーク（テレビの Brave のブックマークバー） */
+  .bm { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .bm button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 10px; min-height: 48px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; color: var(--text); font: inherit; cursor: pointer; }
+  .bm img, .bm .noicon { width: 20px; height: 20px; flex: none; border-radius: 4px; }
+  .bm .noicon { display: grid; place-items: center; background: var(--line); font-size: 12px; }
+  .bm span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.3; }
+  #bmDlg { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text);
+    padding: 16px; width: min(92vw, 360px); }
+  #bmDlg::backdrop { background: rgba(0,0,0,.5); }
+  #bmDlg .t { font-weight: 600; margin-bottom: 2px; overflow-wrap: anywhere; }
+  #bmDlg .u { color: var(--muted); font-size: 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
+  #bmDlg .acts { display: grid; gap: 8px; }
+  #bmDlg .acts button { padding: 12px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--text); text-align: left; cursor: pointer; }
+  #bmDlg .acts button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  #bmDlg .acts small { display: block; color: inherit; opacity: .75; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1></header>
+  <section id="bmSec">
+    <div id="bm" class="bm"></div>
+  </section>
+  <dialog id="bmDlg">
+    <div class="t" id="bmName"></div>
+    <div class="u" id="bmUrl"></div>
+    <div class="acts">
+      <button class="primary" data-how="site">同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></button>
+      <button data-how="new">新しいタブで開く</button>
+      <button data-how="here">今のタブで開く<small>テレビで今出ているタブがこのページに替わる</small></button>
+      <button data-how="">やめる</button>
+    </div>
+  </dialog>
+  <div class="msg" id="msg">テレビの Brave のブックマークバー。押すと開き方を選べます</div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const token = new URLSearchParams(location.search).get("t") || "";
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+if (token) $("back").href = "/?t=" + encodeURIComponent(token);
+if (window.top !== window) $("back").hidden = true;  // phone-input の画面の中（iframe）では戻るリンクは要らない
+async function api(name, body = {}) {
+  try {
+    await fetch("/api/" + name, { method: "POST", headers: { "Content-Type": "application/json", "X-Token": token }, body: JSON.stringify(body) });
+    $("msg").textContent = "テレビで開きました";
+  } catch (e) {
+    $("msg").textContent = "サーバーに届きませんでした";
+  }
+}
+
+// ブックマーク：テレビの Brave のブックマークバー。押すと開き方を選ぶ
+let bmPick = null;
+async function loadBookmarks() {
+  try {
+    const items = await (await fetch("/api/bookmarks", { headers: { "X-Token": token } })).json();
+    if (!items.length) $("msg").textContent = "ブックマークがありません";
+    $("bm").innerHTML = items.map((b, i) => `<button data-bm="${i}" title="${esc(b.url)}">`
+      + (b.icon ? `<img src="${b.icon}" alt="">` : `<span class="noicon">${esc((b.name || "?")[0])}</span>`)
+      + `<span>${esc(b.name || b.url)}</span></button>`).join("");
+    $("bm").onclick = (e) => {
+      const btn = e.target.closest("[data-bm]");
+      if (!btn) return;
+      bmPick = items[Number(btn.dataset.bm)];
+      $("bmName").textContent = bmPick.name || "";
+      $("bmUrl").textContent = bmPick.url;
+      $("bmDlg").showModal();
+    };
+  } catch (e) { /* ブックマークが無い PC（Pi）では出さない */ }
+}
+$("bmDlg").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-how]");
+  if (e.target === $("bmDlg")) return $("bmDlg").close();  // 外側を押したら閉じる
+  if (!b) return;
+  if (b.dataset.how && bmPick) api("openurl", { url: bmPick.url, how: b.dataset.how });
+  $("bmDlg").close();
+});
+loadBookmarks();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadBookmarks(); });
+
+</script>
+</body>
+</html>
