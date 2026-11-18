@@ -38,7 +38,7 @@
   /* 同じサイトのタブがもうテレビの Brave にある（「同じサイトのタブへ」なら新しく開かずにそこへ飛ぶ） */
   .bm button.open { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--panel2)); }
   .bm button.open::after { content: "開いている"; margin-left: auto; flex: none; font-size: 11px; color: var(--good); }
-  .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
   .tabs button { padding: 12px 4px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
     background: var(--panel2); color: var(--text); cursor: pointer; }
   .how { display: grid; gap: 6px; margin-bottom: 14px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
@@ -53,9 +53,10 @@
   <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1>
     <span class="jump"><button data-jump="term" title="テレビを端末（ttyd のタブ）に。F7＋T と同じ">端末</button><button data-jump="video" title="テレビを動画（mpv かプレーヤーのタブ）に。F7＋M と同じ">動画</button></span></header>
   <div class="tabs">
-    <button data-tabs="prev" title="テレビの Brave の左のタブへ">◀ 前のタブ</button>
-    <button data-tabs="next" title="テレビの Brave の右のタブへ">次のタブ ▶</button>
+    <button data-tabs="prev" title="テレビの Brave の左のタブへ">◀ 前</button>
+    <button data-tabs="next" title="テレビの Brave の右のタブへ">次 ▶</button>
     <button data-tabs="close" title="テレビの Brave で今出ているタブを閉じる">✕ 閉じる</button>
+    <button id="fsBtn" title="F6 と同じ。テレビで今出ている動画を全画面に（もう一度で戻る）">⛶ 全画面</button>
   </div>
   <div class="how">
     <label><input type="radio" name="how" value="site" checked> 同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></label>
@@ -104,6 +105,8 @@ document.querySelectorAll("[data-tabs]").forEach((b) => b.addEventListener("clic
   $("msg").textContent = TABS_MSG[b.dataset.tabs];
   setTimeout(markOpen, 1200);
 }));
+
+$("fsBtn").addEventListener("click", () => { api("fullscreen"); $("msg").textContent = "全画面を切り替えました"; });
 
 async function loadBookmarks() {
   try {

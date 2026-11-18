@@ -927,6 +927,13 @@ class App:
     _solo_timer = None
     _tabs_lock = threading.Lock()  # 続けて押されても 1 つずつ順に（前の移動が終わる前に同じタブを基準に動かないように）
 
+    def fullscreen(self):
+        """F6（単独）と同じく、テレビの手前の窓に F9 を送る（Brave なら拡張機能 tv-fullscreen が動画を全画面に、もう一度で戻る）。
+        ページからの命令では全画面にできない（ユーザーの操作が要る）ので、本物のキーとして pkey で送る"""
+        pkey = Path.home() / ".local/bin/pkey"
+        if pkey.exists():
+            subprocess.run([str(pkey), "f9"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def tabs(self, how, solo=False):
         """テレビの Brave のタブを左・右へ、手前のタブを閉じる（拡張機能 tv-fullscreen に中継 tvfs で）。
         solo なら、最後に押してから 1 秒たったところで solo-here（続けて押して通り過ぎたタブの動画を鳴らさない）"""
@@ -1202,6 +1209,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
+    "fullscreen": lambda b: app.fullscreen(),
     "tabs": lambda b: app.tabs(str(b.get("how", "")), bool(b.get("solo"))),
     "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
     "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
