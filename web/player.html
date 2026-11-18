@@ -112,7 +112,7 @@ function render() {
   $("status").textContent = s.status || "";
   $("title").textContent = s.now ? s.now.title : "—";
   $("chan").textContent = s.now ? (s.now.channel || "") : "";
-  document.title = s.now ? `▶ ${s.now.title}` : "autotube プレーヤー";
+  document.title = s.now ? `▶ ${s.now.title} - autotube プレーヤー` : "autotube プレーヤー";  // F7（f7-switch）が窓のタイトルで見分ける
 
   // 再生する動画
   const key = s.now && s.now.key;
