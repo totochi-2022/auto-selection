@@ -823,6 +823,80 @@ class App:
     UKEY = Path.home() / ".local/bin/ukey"  # 本物と同じキー番号でキーを押す（tonzura だけにある）
     WIN_FOCUS = Path.home() / ".local/bin/win-focus"  # 窓・タブを前に出す（tonzura だけにある。F7＋M と同じ）
 
+    BOOKMARKS = Path.home() / ".config/BraveSoftware/Brave-Browser/Default/Bookmarks"  # Brave があるのは tonzura だけ
+    FAVICONS = BOOKMARKS.with_name("Favicons")
+    _bm_cache = (None, [])
+
+    def bookmarks(self):
+        """Brave のブックマークバーの中身（フォルダーの中は「フォルダー名 / 名前」で平らに）。アイコンは Brave の Favicons から"""
+        try:
+            mtime = self.BOOKMARKS.stat().st_mtime
+        except OSError:
+            return []
+        if self._bm_cache[0] == mtime:
+            return self._bm_cache[1]
+        try:
+            root = json.loads(self.BOOKMARKS.read_text())["roots"]["bookmark_bar"]
+        except (OSError, ValueError, KeyError):
+            return []
+        items = []
+
+        def walk(node, prefix=""):
+            for c in node.get("children", []):
+                if c.get("type") == "url" and c.get("url", "").startswith(("http://", "https://")):
+                    items.append({"name": prefix + c.get("name", ""), "url": c["url"]})
+                elif c.get("type") == "folder":
+                    walk(c, prefix + c.get("name", "") + " / ")
+        walk(root)
+        icons = self._favicons([i["url"] for i in items])
+        for i in items:
+            i["icon"] = icons.get(i["url"], "")
+        self._bm_cache = (mtime, items)
+        return items
+
+    def _favicons(self, urls):
+        """URL -> data: の URI。そのページのアイコンが無ければ同じホストのページのもの（Brave が使っている DB は写してから読む）"""
+        import base64
+        import sqlite3
+        import tempfile
+        out = {}
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                db = Path(d) / "fav.db"
+                shutil.copy(self.FAVICONS, db)
+                con = sqlite3.connect(db)
+                for u in urls:
+                    host = urlparse(u).netloc
+                    q = ("SELECT b.image_data FROM icon_mapping m JOIN favicon_bitmaps b ON b.icon_id = m.icon_id "
+                         "WHERE {} ORDER BY abs(b.width - 32) LIMIT 1")
+                    row = con.execute(q.format("m.page_url = ?"), (u,)).fetchone() or \
+                        con.execute(q.format("(m.page_url LIKE ? OR m.page_url LIKE ?)"),
+                                    (f"https://{host}/%", f"http://{host}/%")).fetchone()
+                    if row and row[0]:
+                        out[u] = "data:image/png;base64," + base64.b64encode(row[0]).decode()
+                con.close()
+        except (OSError, sqlite3.Error):
+            pass
+        return out
+
+    def open_url(self, url, how):
+        """テレビの Brave で URL を開く（拡張機能 tv-fullscreen に中継 tvfs で）。how: site / new / here"""
+        if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here"):
+            return
+        env = at.mpv_env()
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if subprocess.run(["wlrctl", "toplevel", "find", "app_id:brave-browser"], env=env,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            subprocess.Popen(["brave-browser", url], env=env, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if not tvfs.exists() or subprocess.run([str(tvfs), "open", url, how], env=env,
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            subprocess.Popen(["brave-browser", url], env=env, start_new_session=True,  # 中継が使えなければ新しいタブで
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def show_video(self):
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
         そのあと solo-here（Shift＋F7 と同じ）で、ほかのタブの動画を一時停止し、ここで止めていたものは再開する"""
@@ -1073,6 +1147,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
+    "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site"))),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),
@@ -1123,6 +1198,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/media/"):
             self._media(path.removeprefix("/media/"))
+        elif path == "/api/bookmarks":
+            self._send(200, json.dumps(app.bookmarks(), ensure_ascii=False))
         elif path == "/api/state":
             self._send(200, json.dumps(app.snapshot(), ensure_ascii=False))
         elif path == "/events":
