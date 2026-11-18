@@ -1402,6 +1402,17 @@ def main():
     threading.Thread(target=app.watchdog, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
+    # HTTPS の入口（phone-input を HTTPS で開いたとき、その中に出すため。HTTPS のページの中に http のページは出せない）。
+    # 証明書は mkcert で作った自分用の認証局のもの（tonzura の ~/.local/share/tonzura-tls）。無ければ開かない
+    tls = Path.home() / ".local/share/tonzura-tls"
+    if (tls / "cert.pem").exists() and (tls / "key.pem").exists():
+        import ssl
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(tls / "cert.pem", tls / "key.pem")
+        https = ThreadingHTTPServer((HOST, int(os.environ.get("AUTOTUBE_HTTPS_PORT", "8776"))), Handler)
+        https.daemon_threads = True
+        https.socket = ctx.wrap_socket(https.socket, server_side=True)
+        threading.Thread(target=https.serve_forever, daemon=True).start()
     log(f"http://localhost:{PORT}/" + (f"?t={TOKEN}" if REQUIRE_TOKEN else "") + " で待っています（Ctrl+C で終了）")
     try:
         server.serve_forever()
