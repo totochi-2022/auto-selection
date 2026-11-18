@@ -901,6 +901,18 @@ class App:
         if solo and solo_here.exists():  # F7 と同じく、行き先以外の動画を一時停止・行き先で止めていたものは再開
             subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def jump(self, where, solo=False):
+        """テレビの画面を 端末（ttyd のタブ）か 動画（mpv かプレーヤーのタブ）へ（F7＋T／F7＋M と同じ）。
+        solo なら F7 と同じく、行き先以外の動画を一時停止・行き先で止めていたものは再開"""
+        arg = {"term": "ttyd", "video": "mpv"}.get(where)
+        if not arg or not self.WIN_FOCUS.exists():
+            return
+        env = at.mpv_env()
+        subprocess.run([str(self.WIN_FOCUS), arg], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        solo_here = self.WIN_FOCUS.with_name("solo-here")
+        if solo and solo_here.exists():
+            subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def show_video(self):
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
         そのあと solo-here（Shift＋F7 と同じ）で、ほかのタブの動画を一時停止し、ここで止めていたものは再開する"""
@@ -1151,6 +1163,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
+    "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
     "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),

@@ -23,6 +23,9 @@
   main { max-width: 720px; margin: 0 auto; padding: 16px 16px 40px; }
   header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   h1 { font-size: 20px; margin: 0; }
+  header .jump { margin-left: auto; display: flex; gap: 6px; }
+  header .jump button { padding: 2px 12px; line-height: 1.5; font: inherit; font-size: 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; }
   header a { color: var(--accent); text-decoration: none; }
   .msg { color: var(--muted); font-size: 13px; min-height: 1.5em; margin-top: 10px; }
   /* ブックマーク（テレビの Brave のブックマークバー） */
@@ -41,7 +44,8 @@
 </head>
 <body>
 <main>
-  <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1></header>
+  <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1>
+    <span class="jump"><button data-jump="term" title="テレビを端末（ttyd のタブ）に。F7＋T と同じ">端末</button><button data-jump="video" title="テレビを動画（mpv かプレーヤーのタブ）に。F7＋M と同じ">動画</button></span></header>
   <div class="how">
     <label><input type="radio" name="how" value="site" checked> 同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></label>
     <label><input type="radio" name="how" value="new"> 新しいタブ</label>
@@ -75,6 +79,12 @@ if (savedHow) document.querySelectorAll('input[name="how"]').forEach((r) => { r.
 if (store.get("bmSolo") !== null) $("solo").checked = store.get("bmSolo") === "1";
 document.querySelectorAll('input[name="how"]').forEach((r) => r.addEventListener("change", () => store.set("bmHow", r.value)));
 $("solo").addEventListener("change", () => store.set("bmSolo", $("solo").checked ? "1" : "0"));
+
+// 見出しの右の 端末／動画：テレビの画面をそこへ（「ほかの動画を止める」のチェックに従う）
+document.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => {
+  api("jump", { where: b.dataset.jump, solo: $("solo").checked });
+  $("msg").textContent = `テレビを${b.textContent}にしました`;
+}));
 
 async function loadBookmarks() {
   try {
