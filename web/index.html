@@ -277,6 +277,7 @@ function render(s) {
     </div>` : (s.picking ? "選んでいます…" : "まだ何も再生していません");
 
   $("showBtn").hidden = !s.can_show;
+  $("maxBtn").hidden = !!s.can_show;  // tonzura では最大化のボタンを出さない（mpv は全画面で開く。Pi では出す）
   const p = s.player;
   $("pos").textContent = fmt(p.pos);
   $("dur").textContent = p.dur ? fmt(p.dur) : (n && !n.duration ? "ライブ" : "0:00");
