@@ -879,6 +879,17 @@ class App:
             pass
         return out
 
+    def open_hosts(self):
+        """テレビの Brave で開いているタブのホストの一覧（tvfs hosts）。ブックマークの「もうタブがある」の印に"""
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if not tvfs.exists():
+            return []
+        try:
+            r = subprocess.run([str(tvfs), "hosts"], capture_output=True, text=True, timeout=3, env=at.mpv_env())
+            return json.loads(r.stdout) if r.returncode == 0 else []
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return []
+
     def open_url(self, url, how, solo=False):
         """テレビの Brave で URL を開く（拡張機能 tv-fullscreen に中継 tvfs で）。how: site / new / here"""
         if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here"):
@@ -1246,6 +1257,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/media/"):
             self._media(path.removeprefix("/media/"))
+        elif path == "/api/openhosts":
+            self._send(200, json.dumps(app.open_hosts()))
         elif path == "/api/bookmarks":
             self._send(200, json.dumps(app.bookmarks(), ensure_ascii=False))
         elif path == "/api/state":

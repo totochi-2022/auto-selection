@@ -35,6 +35,9 @@
   .bm img, .bm .noicon { width: 20px; height: 20px; flex: none; border-radius: 4px; }
   .bm .noicon { display: grid; place-items: center; background: var(--line); font-size: 12px; }
   .bm span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.3; }
+  /* 同じサイトのタブがもうテレビの Brave にある（「同じサイトのタブへ」なら新しく開かずにそこへ飛ぶ） */
+  .bm button.open { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--panel2)); }
+  .bm button.open::after { content: "開いている"; margin-left: auto; flex: none; font-size: 11px; color: var(--good); }
   .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
   .tabs button { padding: 12px 4px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
     background: var(--panel2); color: var(--text); cursor: pointer; }
@@ -99,13 +102,14 @@ const TABS_MSG = { prev: "左のタブへ", next: "右のタブへ", close: "タ
 document.querySelectorAll("[data-tabs]").forEach((b) => b.addEventListener("click", () => {
   api("tabs", { how: b.dataset.tabs, solo: $("solo").checked });
   $("msg").textContent = TABS_MSG[b.dataset.tabs];
+  setTimeout(markOpen, 1200);
 }));
 
 async function loadBookmarks() {
   try {
     const items = await (await fetch("/api/bookmarks", { headers: { "X-Token": token } })).json();
     if (!items.length) $("msg").textContent = "ブックマークがありません";
-    $("bm").innerHTML = items.map((b, i) => `<button data-bm="${i}" title="${esc(b.url)}">`
+    $("bm").innerHTML = items.map((b, i) => `<button data-bm="${i}" data-host="${esc(hostOf(b.url))}" title="${esc(b.url)}">`
       + (b.icon ? `<img src="${b.icon}" alt="">` : `<span class="noicon">${esc((b.name || "?")[0])}</span>`)
       + `<span>${esc(b.name || b.url)}</span></button>`).join("");
     $("bm").onclick = (e) => {
@@ -114,10 +118,22 @@ async function loadBookmarks() {
       const b = items[Number(btn.dataset.bm)];
       const how = document.querySelector('input[name="how"]:checked').value;
       api("openurl", { url: b.url, how, solo: $("solo").checked });
+      setTimeout(markOpen, 1500);
       $("msg").textContent = `開きました：${b.name || b.url}`;
     };
+    markOpen();
   } catch (e) { /* ブックマークが無い PC（Pi）では出さない */ }
 }
+
+// もうタブがあるブックマークに色を付ける（テレビの Brave で開いているタブのホストと比べる）。開いている間は 4 秒ごとに見直す
+function hostOf(u) { try { return new URL(u).host; } catch (e) { return ""; } }
+async function markOpen() {
+  try {
+    const hosts = new Set(await (await fetch("/api/openhosts", { headers: { "X-Token": token } })).json());
+    document.querySelectorAll("#bm [data-host]").forEach((b) => b.classList.toggle("open", hosts.has(b.dataset.host)));
+  } catch (e) {}
+}
+setInterval(() => { if (!document.hidden) markOpen(); }, 4000);
 loadBookmarks();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) loadBookmarks(); });
 
