@@ -824,10 +824,14 @@ class App:
     WIN_FOCUS = Path.home() / ".local/bin/win-focus"  # 窓・タブを前に出す（tonzura だけにある。F7＋M と同じ）
 
     def show_video(self):
-        """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）"""
-        if self.WIN_FOCUS.exists():
-            subprocess.run([str(self.WIN_FOCUS), "mpv"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           env=at.mpv_env())
+        """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
+        そのあと solo-here（Shift＋F7 と同じ）で、ほかのタブの動画を一時停止し、ここで止めていたものは再開する"""
+        if not self.WIN_FOCUS.exists():
+            return
+        for cmd in (self.WIN_FOCUS, self.WIN_FOCUS.with_name("solo-here")):
+            if cmd.exists():
+                subprocess.run([str(cmd), *(["mpv"] if cmd == self.WIN_FOCUS else [])],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=at.mpv_env())
     FULL_WAIT = 6  # ページが読み込まれるのを待つ秒数
 
     def _video_fullscreen(self):
