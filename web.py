@@ -913,6 +913,19 @@ class App:
         if solo and solo_here.exists():
             subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def tabs(self, how):
+        """テレビの Brave のタブを左・右へ、手前のタブを閉じる（拡張機能 tv-fullscreen に中継 tvfs で）"""
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if how not in ("prev", "next", "close") or not tvfs.exists():
+            return
+        env = at.mpv_env()
+        if subprocess.run(["wlrctl", "toplevel", "find", "app_id:brave-browser"], env=env,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            return
+        subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([str(tvfs), "tabs", how], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def show_video(self):
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
         そのあと solo-here（Shift＋F7 と同じ）で、ほかのタブの動画を一時停止し、ここで止めていたものは再開する"""
@@ -1163,6 +1176,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
+    "tabs": lambda b: app.tabs(str(b.get("how", ""))),
     "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
     "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
     "pause": lambda b: app.toggle_pause(),
