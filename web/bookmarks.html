@@ -32,35 +32,26 @@
   .bm img, .bm .noicon { width: 20px; height: 20px; flex: none; border-radius: 4px; }
   .bm .noicon { display: grid; place-items: center; background: var(--line); font-size: 12px; }
   .bm span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.3; }
-  #bmDlg { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text);
-    padding: 16px; width: min(92vw, 360px); }
-  #bmDlg::backdrop { background: rgba(0,0,0,.5); }
-  #bmDlg .t { font-weight: 600; margin-bottom: 2px; overflow-wrap: anywhere; }
-  #bmDlg .u { color: var(--muted); font-size: 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
-  #bmDlg .acts { display: grid; gap: 8px; }
-  #bmDlg .acts button { padding: 12px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
-    background: var(--panel2); color: var(--text); text-align: left; cursor: pointer; }
-  #bmDlg .acts button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  #bmDlg .acts small { display: block; color: inherit; opacity: .75; font-size: 12px; }
+  .how { display: grid; gap: 6px; margin-bottom: 14px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .how label { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; cursor: pointer; }
+  .how input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  .how small { grid-column: 2; color: var(--muted); font-size: 12px; line-height: 1.3; }
+  .how .solo { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 2px; }
 </style>
 </head>
 <body>
 <main>
   <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1></header>
+  <div class="how">
+    <label><input type="radio" name="how" value="site" checked> 同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></label>
+    <label><input type="radio" name="how" value="new"> 新しいタブ</label>
+    <label><input type="radio" name="how" value="here"> 今のタブ<small>テレビで今出ているタブがこのページに替わる</small></label>
+    <label class="solo"><input type="checkbox" id="solo" checked> ほかの動画を止める<small>F7 と同じ。行き先以外の動画を一時停止し、行き先で止めていたものは再開</small></label>
+  </div>
   <section id="bmSec">
     <div id="bm" class="bm"></div>
   </section>
-  <dialog id="bmDlg">
-    <div class="t" id="bmName"></div>
-    <div class="u" id="bmUrl"></div>
-    <div class="acts">
-      <button class="primary" data-how="site">同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></button>
-      <button data-how="new">新しいタブで開く</button>
-      <button data-how="here">今のタブで開く<small>テレビで今出ているタブがこのページに替わる</small></button>
-      <button data-how="">やめる</button>
-    </div>
-  </dialog>
-  <div class="msg" id="msg">テレビの Brave のブックマークバー。押すと開き方を選べます</div>
+  <div class="msg" id="msg">テレビの Brave のブックマークバー。押すと上の開き方ですぐ開きます</div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -71,14 +62,20 @@ if (window.top !== window) $("back").hidden = true;  // phone-input の画面の
 async function api(name, body = {}) {
   try {
     await fetch("/api/" + name, { method: "POST", headers: { "Content-Type": "application/json", "X-Token": token }, body: JSON.stringify(body) });
-    $("msg").textContent = "テレビで開きました";
   } catch (e) {
     $("msg").textContent = "サーバーに届きませんでした";
   }
 }
 
-// ブックマーク：テレビの Brave のブックマークバー。押すと開き方を選ぶ
-let bmPick = null;
+// ブックマーク：テレビの Brave のブックマークバー。押すと上で選んだ開き方ですぐ開く（選んだものはこのスマホに覚える）
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+const savedHow = store.get("bmHow");
+if (savedHow) document.querySelectorAll('input[name="how"]').forEach((r) => { r.checked = r.value === savedHow; });
+if (store.get("bmSolo") !== null) $("solo").checked = store.get("bmSolo") === "1";
+document.querySelectorAll('input[name="how"]').forEach((r) => r.addEventListener("change", () => store.set("bmHow", r.value)));
+$("solo").addEventListener("change", () => store.set("bmSolo", $("solo").checked ? "1" : "0"));
+
 async function loadBookmarks() {
   try {
     const items = await (await fetch("/api/bookmarks", { headers: { "X-Token": token } })).json();
@@ -89,20 +86,13 @@ async function loadBookmarks() {
     $("bm").onclick = (e) => {
       const btn = e.target.closest("[data-bm]");
       if (!btn) return;
-      bmPick = items[Number(btn.dataset.bm)];
-      $("bmName").textContent = bmPick.name || "";
-      $("bmUrl").textContent = bmPick.url;
-      $("bmDlg").showModal();
+      const b = items[Number(btn.dataset.bm)];
+      const how = document.querySelector('input[name="how"]:checked').value;
+      api("openurl", { url: b.url, how, solo: $("solo").checked });
+      $("msg").textContent = `開きました：${b.name || b.url}`;
     };
   } catch (e) { /* ブックマークが無い PC（Pi）では出さない */ }
 }
-$("bmDlg").addEventListener("click", (e) => {
-  const b = e.target.closest("[data-how]");
-  if (e.target === $("bmDlg")) return $("bmDlg").close();  // 外側を押したら閉じる
-  if (!b) return;
-  if (b.dataset.how && bmPick) api("openurl", { url: bmPick.url, how: b.dataset.how });
-  $("bmDlg").close();
-});
 loadBookmarks();
 document.addEventListener("visibilitychange", () => { if (!document.hidden) loadBookmarks(); });
 

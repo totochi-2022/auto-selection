@@ -879,7 +879,7 @@ class App:
             pass
         return out
 
-    def open_url(self, url, how):
+    def open_url(self, url, how, solo=False):
         """テレビの Brave で URL を開く（拡張機能 tv-fullscreen に中継 tvfs で）。how: site / new / here"""
         if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here"):
             return
@@ -896,6 +896,10 @@ class App:
                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
             subprocess.Popen(["brave-browser", url], env=env, start_new_session=True,  # 中継が使えなければ新しいタブで
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        solo_here = self.WIN_FOCUS.with_name("solo-here")
+        if solo and solo_here.exists():  # F7 と同じく、行き先以外の動画を一時停止・行き先で止めていたものは再開
+            subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def show_video(self):
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
@@ -1147,7 +1151,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
-    "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site"))),
+    "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),
