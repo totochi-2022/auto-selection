@@ -58,7 +58,7 @@
     <label><input type="radio" name="how" value="site" checked> 同じサイトのタブへ<small>そのサイトのタブがあれば移る（ページは違っても）。無ければ新しいタブ</small></label>
     <label><input type="radio" name="how" value="new"> 新しいタブ</label>
     <label><input type="radio" name="how" value="here"> 今のタブ<small>テレビで今出ているタブがこのページに替わる</small></label>
-    <label class="solo"><input type="checkbox" id="solo" checked> ほかの動画を止める<small>F7 と同じ。行き先以外の動画を一時停止し、行き先で止めていたものは再開</small></label>
+    <label class="solo"><input type="checkbox" id="solo" checked> ほかの動画を止める<small>F7 と同じ。行き先以外の動画を一時停止し、行き先で止めていたものは再開（タブの左右・閉じるでも。続けて押したときは止まってから 1 秒後）</small></label>
   </div>
   <section id="bmSec">
     <div id="bm" class="bm"></div>
@@ -97,7 +97,7 @@ document.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("clic
 // タブの左右・閉じる
 const TABS_MSG = { prev: "左のタブへ", next: "右のタブへ", close: "タブを閉じました" };
 document.querySelectorAll("[data-tabs]").forEach((b) => b.addEventListener("click", () => {
-  api("tabs", { how: b.dataset.tabs });
+  api("tabs", { how: b.dataset.tabs, solo: $("solo").checked });
   $("msg").textContent = TABS_MSG[b.dataset.tabs];
 }));
 

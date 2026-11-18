@@ -913,8 +913,12 @@ class App:
         if solo and solo_here.exists():
             subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def tabs(self, how):
-        """テレビの Brave のタブを左・右へ、手前のタブを閉じる（拡張機能 tv-fullscreen に中継 tvfs で）"""
+    _solo_timer = None
+    _tabs_lock = threading.Lock()  # 続けて押されても 1 つずつ順に（前の移動が終わる前に同じタブを基準に動かないように）
+
+    def tabs(self, how, solo=False):
+        """テレビの Brave のタブを左・右へ、手前のタブを閉じる（拡張機能 tv-fullscreen に中継 tvfs で）。
+        solo なら、最後に押してから 1 秒たったところで solo-here（続けて押して通り過ぎたタブの動画を鳴らさない）"""
         tvfs = Path.home() / ".local/bin/tvfs"
         if how not in ("prev", "next", "close") or not tvfs.exists():
             return
@@ -922,9 +926,20 @@ class App:
         if subprocess.run(["wlrctl", "toplevel", "find", "app_id:brave-browser"], env=env,
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
             return
-        subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run([str(tvfs), "tabs", how], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with self._tabs_lock:
+            subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([str(tvfs), "tabs", how], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        solo_here = self.WIN_FOCUS.with_name("solo-here")
+        with self.lock:
+            if self._solo_timer:
+                self._solo_timer.cancel()
+            self._solo_timer = None
+            if solo and solo_here.exists():
+                self._solo_timer = threading.Timer(1.0, subprocess.run, args=([str(solo_here)],),
+                                                   kwargs={"env": env, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL})
+                self._solo_timer.daemon = True
+                self._solo_timer.start()
 
     def show_video(self):
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
@@ -1176,7 +1191,7 @@ ACTIONS = {
     "quit": lambda b: app.quit_player(),
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
-    "tabs": lambda b: app.tabs(str(b.get("how", ""))),
+    "tabs": lambda b: app.tabs(str(b.get("how", "")), bool(b.get("solo"))),
     "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
     "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
     "pause": lambda b: app.toggle_pause(),
