@@ -890,7 +890,7 @@ class App:
         except (subprocess.TimeoutExpired, ValueError, OSError):
             return []
 
-    def open_url(self, url, how, solo=False):
+    def open_bookmark(self, url, how, solo=False):
         """テレビの Brave で URL を開く（拡張機能 tv-fullscreen に中継 tvfs で）。how: site / new / here"""
         if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here"):
             return
@@ -1244,7 +1244,7 @@ ACTIONS = {
     "video": lambda b: app.video(str(b.get("cmd", ""))),
     "tabs": lambda b: app.tabs(str(b.get("how", "")), bool(b.get("solo"))),
     "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
-    "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
+    "openurl": lambda b: app.open_bookmark(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
     "pause": lambda b: app.toggle_pause(),
     "mute": lambda b: app.toggle_mute(),
     "volume": lambda b: app.set_volume(b.get("vol"), b.get("delta")),
