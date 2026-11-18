@@ -163,13 +163,29 @@ v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
 $("next").onclick = () => post("next");
 $("mpv").onclick = async () => { v.pause(); await post("web", { on: false }); location.href = "/"; };
 
+// リモコンからの操作（web.py の ctl。番号が増えたら実行。開いた時点の番号は実行しない）
+let lastCtl = null;
+function applyCtl(c) {
+  if (!c || lastCtl === null) { lastCtl = c ? c.id : 0; return; }
+  if (c.id <= lastCtl) return;
+  lastCtl = c.id;
+  if (!v.dataset.key) return;
+  if (c.cmd === "pause") v.paused ? v.play().catch(() => {}) : v.pause();
+  else if (c.cmd === "seek") v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + Number(c.arg || 0)));
+  else if (c.cmd === "volume") { v.volume = Math.max(0, Math.min(1, Number(c.arg) / 100)); v.muted = false; }
+  else if (c.cmd === "mute") v.muted = !v.muted;
+  sendPos();
+}
+
 function connect() {
   const es = new EventSource("/events");
-  es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
+  // つながるたびにブラウザで再生するモードにする（web.py を起動し直したあとも、このページが開いていればこのモードに戻る）
+  es.onopen = () => post("web", { on: true });
+  es.onmessage = (e) => { state = JSON.parse(e.data); applyCtl(state.ctl); render(); };
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
 // このページを開いたら、ブラウザで再生するモードにする
-post("web", { on: true }).then(() => fetch("/api/state")).then((r) => r.json()).then((s) => { state = s; render(); connect(); });
+post("web", { on: true }).then(() => fetch("/api/state")).then((r) => r.json()).then((s) => { state = s; applyCtl(s.ctl); render(); connect(); });
 </script>
 </body>
 </html>

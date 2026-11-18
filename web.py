@@ -301,6 +301,7 @@ class App:
         self.stalls = 0                 # 今の動画で読み込み直した回数
         self.mpv = Mpv(self.on_mpv_event)
         self.web = False           # ブラウザで再生するモード（/player のページを開くとオン）
+        self.ctl = {"id": 0}       # ブラウザで再生中にリモコンから来た操作（一時停止など）。番号が増えたらページが実行する
         self.media = Media(self.changed)
         # mpv の起動し直しを同時に 2 つ走らせない（走ると古い mpv が止められずに残り、画面に映り続ける）
         self.load_lock = threading.Lock()
@@ -338,7 +339,7 @@ class App:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
                     "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player,
-                    "web": self.web, "media": self._media_snapshot()}
+                    "web": self.web, "media": self._media_snapshot(), "ctl": self.ctl}
 
     def _media_snapshot(self):
         """ブラウザで再生するモードの、今とキューの動画のファイルの状態（key -> 状態）"""
@@ -926,7 +927,15 @@ class App:
             except RuntimeError as e:
                 self.set_status(str(e))
 
+    def web_ctl(self, cmd, arg=None):
+        """ブラウザで再生中：操作をプレーヤーのページに送る（状態の ctl に番号つきで載せ、ページが実行する）"""
+        with self.lock:
+            self.ctl = {"id": self.ctl["id"] + 1, "cmd": cmd, "arg": arg}
+        self.changed()
+
     def toggle_pause(self):
+        if self.web:
+            return self.web_ctl("pause")
         self.mpv.command("cycle", "pause")
 
     def set_volume(self, vol=None, delta=None):
@@ -934,15 +943,21 @@ class App:
             v = self.player["volume"] + delta if delta is not None else vol
             v = max(0, min(100, int(v)))
             self.player["volume"] = v
+        if self.web:
+            return self.web_ctl("volume", v)
         self.mpv.command("set_property", "volume", v)
         self.changed()
 
     def toggle_mute(self):
+        if self.web:
+            return self.web_ctl("mute")
         with self.lock:
             muted = not self.player["muted"]
         self.mpv.command("set_property", "mute", muted)
 
     def seek(self, sec):
+        if self.web:
+            return self.web_ctl("seek", sec)
         self.mpv.command("seek", sec, "relative")
 
     def toggle_max(self):
