@@ -927,6 +927,37 @@ class App:
     _solo_timer = None
     _tabs_lock = threading.Lock()  # 続けて押されても 1 つずつ順に（前の移動が終わる前に同じタブを基準に動かないように）
 
+    VIDEO_SEEK = {"back180": -180, "back60": -60, "back": -10, "fwd": 10, "fwd60": 60, "fwd180": 180}
+
+    def video(self, cmd):
+        """テレビの手前の動画を操作する（F6＋キーと同じ。リモコンのブックマークのページの動画のボタン・シークバー）。
+        手前が mpv なら IPC で、それ以外（Brave）なら拡張機能 tv-fullscreen に中継 tvfs で。cmd: back180〜fwd180・toggle・volup・voldown・pct:NN"""
+        if not (cmd in self.VIDEO_SEEK or cmd in ("toggle", "volup", "voldown") or re.fullmatch(r"pct:\d+(\.\d+)?", cmd)):
+            return
+        env = at.mpv_env()
+        front = subprocess.run(["wlrctl", "toplevel", "list", "state:active"], capture_output=True, text=True,
+                               env=env).stdout.partition(":")[0].strip()
+        if front == "mpv" and self.mpv.alive():
+            if cmd in self.VIDEO_SEEK:
+                self.mpv.command("seek", self.VIDEO_SEEK[cmd], "relative")
+                self.mpv.command("show-progress")
+            elif cmd == "toggle":
+                self.mpv.command("cycle", "pause")
+            elif cmd in ("volup", "voldown"):
+                with self.lock:
+                    v = max(0, min(100, int(self.player["volume"]) + (10 if cmd == "volup" else -10)))
+                    self.player["volume"] = v
+                self.mpv.command("set_property", "volume", v)
+                self.mpv.command("show-text", f"音量 {v}")
+                self.changed()
+            else:
+                self.mpv.command("seek", float(cmd[4:]), "absolute-percent")
+                self.mpv.command("show-progress")
+            return
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if tvfs.exists():
+            subprocess.run([str(tvfs), "video", cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     def fullscreen(self):
         """F6（単独）と同じく、テレビの手前の窓に F9 を送る（Brave なら拡張機能 tv-fullscreen が動画を全画面に、もう一度で戻る）。
         ページからの命令では全画面にできない（ユーザーの操作が要る）ので、本物のキーとして pkey で送る"""
@@ -1210,6 +1241,7 @@ ACTIONS = {
     "browser": lambda b: app.open_browser(),
     "show": lambda b: app.show_video(),
     "fullscreen": lambda b: app.fullscreen(),
+    "video": lambda b: app.video(str(b.get("cmd", ""))),
     "tabs": lambda b: app.tabs(str(b.get("how", "")), bool(b.get("solo"))),
     "jump": lambda b: app.jump(str(b.get("where", "")), bool(b.get("solo"))),
     "openurl": lambda b: app.open_url(str(b.get("url", "")), str(b.get("how", "site")), bool(b.get("solo"))),
