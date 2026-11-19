@@ -1444,7 +1444,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/script/"):  # 台本（~/.cache/autotube/dub/ID.script.json）
             key = path.removeprefix("/script/")
             var = parse_qs(urlparse(self.path).query).get("v", [""])[0]  # 比べる版（opus など）
-            f = dubmod.OUT / (f"{key}.{var}.script.json" if re.fullmatch(r"\w+", var or "-") else f"{key}.script.json")
+            f = dubmod.script_path(key, var if re.fullmatch(r"\w+", var or "-") else "")
             if re.fullmatch(r"[\w-]+", key) and f.exists():
                 self._send(200, f.read_bytes())
             else:

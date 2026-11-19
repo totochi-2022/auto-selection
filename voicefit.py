@@ -86,7 +86,9 @@ def main():
     ap.add_argument("--src", default="opus")
     ap.add_argument("--out", default="fit")
     a = ap.parse_args()
-    src = D / (f"{a.video_id}.{a.src}.script.json" if a.src else f"{a.video_id}.script.json")
+    sys.path.insert(0, str(Path(__file__).parent))
+    import dub
+    src = dub.script_path(a.video_id, a.src)
     d = json.loads(src.read_text())
     lines = d["lines"]
     for L in lines:  # 配役を丁寧に決めていない台本（普通の動画）：男女だけで「男性」「女性」の 2 人とみなす
@@ -177,8 +179,7 @@ def main():
     for L in lines:
         if L["who"] in cast:
             L["voice"] = cast[L["who"]]
-    out = D / f"{a.video_id}.{a.out}.script.json"
-    out.write_text(json.dumps({**d, "cast": cast, "variant": f"{a.src}+声選び", "lines": lines}, ensure_ascii=False, indent=1))
+    out = dub.save_script(a.video_id, {**d, "cast": cast, "variant": f"{a.src or 'ふつう'}+声選び", "lines": lines}, a.out)
     print(f"書いた: {out}")
 
 

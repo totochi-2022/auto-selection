@@ -16,6 +16,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import wave
 from pathlib import Path
@@ -27,7 +28,47 @@ import autotube as at  # noqa: E402  ask_claude を使う
 VOICEVOX = "http://127.0.0.1:50021"
 VOICES = {"F": 3, "M": 13}  # ずんだもん（ノーマル）・青山龍星（ノーマル）
 RATE = 24000
-OUT = Path.home() / ".cache/autotube/dub"
+OUT = Path.home() / ".cache/autotube/dub"  # 声にした音声・実験用の動画（消えてもよい）
+# 台本（時刻・配役・声・訳）は小さい（12 分で 34KB）ので、しばらく捨てずに取っておく。目録 index.json で「もう作ったか」を調べる
+SCRIPTS = Path.home() / ".local/share/autotube/dub-scripts"
+INDEX = SCRIPTS / "index.json"
+
+
+def script_path(video_id, variant=""):
+    """台本の場所。variant は版（""＝ふつう、opus＝opus で配役、fit・rank＝声選び など）"""
+    return SCRIPTS / (f"{video_id}.{variant}.script.json" if variant else f"{video_id}.script.json")
+
+
+def load_index():
+    try:
+        return json.loads(INDEX.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def find_script(video_id, prefer=("rank", "fit", "opus", "")):
+    """作ったことのある台本を探す（目録を見て、よい版から）。無ければ None"""
+    for v in prefer:
+        f = script_path(video_id, v)
+        if f.exists():
+            return f
+    return None
+
+
+def save_script(video_id, data, variant="", meta=None):
+    """台本を保存して目録に書く。meta：url・title・channel など"""
+    SCRIPTS.mkdir(parents=True, exist_ok=True)
+    f = script_path(video_id, variant)
+    f.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+    idx = load_index()
+    e = idx.setdefault(video_id, {"url": f"https://www.youtube.com/watch?v={video_id}", "created": int(time.time())})
+    e.update({k: v for k, v in (meta or {}).items() if v})
+    e["lang"] = data.get("lang", e.get("lang"))
+    e["lines"] = len(data.get("lines") or [])
+    e["variants"] = sorted(set(e.get("variants", [])) | {variant or "base"})
+    e["updated"] = int(time.time())
+    INDEX.write_text(json.dumps(idx, ensure_ascii=False, indent=1))
+    return f
 CHUNK = 40  # 1 回に訳す字幕の行数
 
 
