@@ -218,6 +218,22 @@ def search_params(sort="", period="", live=False):
     return urllib.parse.quote(base64.b64encode(out).decode()) if out else ""
 
 
+def english_queries(request, queries):
+    """「英語も」のとき：同じ希望で英語の動画を探す英語の検索ワードを 2〜3 個。作れなければ空"""
+    obj = ask_claude(f"""次の希望に合う英語の YouTube 動画を探します。英語の検索ワードを 3 個考えてください。
+希望の内容から外れないことが最優先。英語圏でよく観られている定番の動画・チャンネルが見つかる言葉にしてください。
+
+# 希望
+{request}
+
+# 日本語の検索ワード（参考）
+{chr(10).join(queries)}
+
+次の JSON だけを1行で出力してください:
+{{"queries": ["english query 1", "english query 2", "english query 3"]}}""")
+    return [q for q in (obj or {}).get("queries", []) if isinstance(q, str) and q.strip()][:3]
+
+
 def plan_similar(request):
     """「〇〇みたいな」：〇〇のよいところを言葉にして、似た別の動画を探す（〇〇自身は外す）"""
     obj = ask_claude(f"""次の希望は「ある動画・チャンネル（お手本）に似た、別の動画が観たい」というものです。

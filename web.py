@@ -407,6 +407,11 @@ class App:
                 queries, claude_live, kind, filters = plan["queries"], plan["live"], plan["kind"], plan["filters"]
                 if opts.get("music") and opts["mode"] != "normal":
                     kind = "music"
+                if opts.get("en") and kind == "topic" and not plan.get("foreign"):
+                    # 「英語も」：日本語の希望だと検索ワードが日本語だけになり英語の動画が見つからないので、英語でも探す
+                    done = self.ticking("英語の検索ワードも考えています…")
+                    queries = queries + [q for q in at.english_queries(request, queries) if q not in queries]
+                    done()
                 if kind == "channel" and not channel:
                     # チャンネル名の希望：YouTube でチャンネルを探して「このチャンネル」モードにする
                     done = self.ticking(f"チャンネル「{plan['channel']}」を探しています…")
