@@ -1436,6 +1436,34 @@ class Handler(BaseHTTPRequestHandler):
             self._media(path.removeprefix("/media/"))
         elif path.startswith("/dub/"):  # 吹き替えの音（WAV）
             self._media(path.removeprefix("/dub/"), app.dub.path)
+        # ---- 吹き替えの実験（台本だけを持ち、流しながら声にする）：/dubtest?id=動画 ----
+        elif path == "/dubtest":
+            self._send(200, (WEB_DIR / "dubtest.html").read_bytes(), "text/html; charset=utf-8")
+        elif path.startswith("/script/"):  # 台本（~/.cache/autotube/dub/ID.script.json）
+            key = path.removeprefix("/script/")
+            f = dubmod.OUT / f"{key}.script.json"
+            if re.fullmatch(r"[\w-]+", key) and f.exists():
+                self._send(200, f.read_bytes())
+            else:
+                self._send(404, '{"error":"no script"}')
+        elif path.startswith("/dubvideo/"):  # 実験用に落とした動画（~/.cache/autotube/dub/ID.video.*）
+            def find(key):
+                if not re.fullmatch(r"[\w-]+", key):
+                    return None
+                return next((f for f in dubmod.OUT.glob(f"{key}.video.*") if ".part" not in f.name), None)
+            self._media(path.removeprefix("/dubvideo/"), find)
+        elif path == "/tts":  # 文を声に（VOICEVOX）：/tts?text=&sp=話者&speed=速さ
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                pcm = dubmod.tts(q.get("text", [""])[0][:400], int(q.get("sp", ["3"])[0]),
+                                 max(0.5, min(2.5, float(q.get("speed", ["1.15"])[0]))))
+                import io, wave
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(dubmod.RATE); w.writeframes(pcm.tobytes())
+                self._send(200, buf.getvalue(), "audio/wav")
+            except Exception as e:
+                self._send(500, json.dumps({"error": str(e)}))
         elif path == "/api/openhosts":
             self._send(200, json.dumps(app.open_hosts()))
         elif path == "/api/bookmarks":

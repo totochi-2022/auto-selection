@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>吹き替えの実験</title>
+<!--
+  吹き替えの実験：台本（/script/ID：時刻・男女・日本語）だけを持ち、流しながら VOICEVOX で声にして重ねる（/tts）。
+  先の LOOKAHEAD 秒の文を先回りで声にし、Web Audio で時刻ぴったりに鳴らす。早送り・巻き戻し・止める・速さの変更にもついていく。
+  文の声が次の文までに収まらなければ速く読む（2 倍まで）。日本語を字幕として出す
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #000; color: #eee; font-family: sans-serif; }
+  #wrap { position: relative; width: 100vw; height: 100vh; }
+  video { width: 100%; height: 100%; background: #000; }
+  #sub { position: absolute; left: 5%; right: 5%; bottom: 12%; text-align: center; font-size: 34px; line-height: 1.4;
+         text-shadow: 0 0 6px #000, 0 0 3px #000; pointer-events: none; }
+  #sub small { display: block; font-size: 18px; color: #ccc; }
+  #bar { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; gap: 12px; align-items: center;
+         background: rgba(0,0,0,.55); padding: 6px 10px; border-radius: 8px; font-size: 15px; }
+  #start { position: absolute; inset: 0; margin: auto; width: 360px; height: 90px; font-size: 26px; border-radius: 14px; }
+  button { background: #2b3440; color: #eee; border: 0; border-radius: 8px; padding: 6px 12px; font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <video id="v" controls playsinline></video>
+  <div id="sub"></div>
+  <div id="bar">
+    <span id="info">台本を読み込み中…</span>
+    <label>元の音 <input type="range" id="orig" min="0" max="100" value="25"> <span id="origv">25%</span></label>
+    <label><input type="checkbox" id="showEn" checked> 英語も出す</label>
+    <span id="stat"></span>
+  </div>
+  <button id="start">▶ 吹き替えで再生</button>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const id = new URLSearchParams(location.search).get("id") || "";
+const v = $("v");
+const VOICE = { M: 13, F: 3 };   // 青山龍星・ずんだもん
+const LOOKAHEAD = 8;             // 何秒先までの文を先回りで声にするか
+let lines = [], ctx = null;
+const cache = new Map();         // 文の番号 -> Promise<AudioBuffer>（作った声は覚えておく：巻き戻したらすぐ鳴る）
+const scheduled = new Map();     // 文の番号 -> 鳴らす予約（AudioBufferSourceNode。作っている間は null）
+let made = 0, late = 0;
+
+v.src = `/dubvideo/${encodeURIComponent(id)}`;
+fetch(`/script/${encodeURIComponent(id)}`).then((r) => r.json()).then((d) => {
+  lines = d.lines || [];
+  $("info").textContent = `台本 ${lines.length} 文（${d.lang === "ja" ? "日本語の字幕から" : "英語から訳した"}）`;
+}).catch(() => { $("info").textContent = "台本がありません"; });
+
+// その文に使える時間：この文の始まりから次の文の始まりまで（最後の文は終わり＋3 秒）
+const room = (i) => Math.max(0.8, (lines[i + 1] ? lines[i + 1].t : lines[i].end + 3) - lines[i].t);
+
+async function voice(text, sp, speed) {
+  const r = await fetch(`/tts?text=${encodeURIComponent(text)}&sp=${sp}&speed=${speed}`);
+  if (!r.ok) throw new Error(await r.text());
+  return ctx.decodeAudioData(await r.arrayBuffer());
+}
+function synth(i) {
+  if (!cache.has(i)) {
+    cache.set(i, (async () => {
+      const L = lines[i], sp = VOICE[L.sp] || VOICE.M;
+      let speed = 1.15, buf = await voice(L.ja, sp, speed);
+      if (buf.duration > room(i)) {  // 収まらなければ速く読み直す（2 倍まで）
+        speed = Math.min(2, speed * buf.duration / room(i) * 1.05);
+        buf = await voice(L.ja, sp, speed);
+      }
+      made++;
+      return buf;
+    })());
+  }
+  return cache.get(i);
+}
+
+function stopAll() {
+  for (const s of scheduled.values()) { try { s && s.stop(); } catch (e) {} }
+  scheduled.clear();
+}
+
+// 先の文を予約する。遅れて来た文（シークの直後など）は、その文の途中から鳴らす
+function tick() {
+  if (!ctx || v.paused || v.seeking || !lines.length) return;
+  const now = v.currentTime;
+  for (let i = 0; i < lines.length; i++) {
+    const L = lines[i];
+    if (L.t > now + LOOKAHEAD) break;
+    if (L.t + room(i) < now || scheduled.has(i)) continue;
+    scheduled.set(i, null);
+    synth(i).then((buf) => {
+      if (!scheduled.has(i) || scheduled.get(i) || v.paused) return;  // その間に止めた・飛んだ
+      const n = v.currentTime, off = n - L.t;
+      if (off >= buf.duration) return;  // もう言い終わっているはずの文
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = v.playbackRate;
+      src.connect(ctx.destination);
+      if (off < 0) src.start(ctx.currentTime - off / v.playbackRate);
+      else { src.start(0, off); late++; }
+      scheduled.set(i, src);
+    }).catch((e) => { $("stat").textContent = "声にできませんでした: " + e.message; });
+  }
+  $("stat").textContent = `声にした ${made} 文・途中から ${late}`;
+}
+setInterval(tick, 250);
+for (const ev of ["seeking", "pause", "ratechange"]) v.addEventListener(ev, stopAll);
+for (const ev of ["seeked", "play", "ratechange"]) v.addEventListener(ev, () => setTimeout(tick, 0));
+
+// 字幕：今の時刻の文
+v.addEventListener("timeupdate", () => {
+  const now = v.currentTime;
+  const i = lines.findIndex((L, k) => L.t <= now && now < L.t + Math.min(room(k), Math.max(2.5, L.end - L.t + 1)));
+  const L = lines[i];
+  $("sub").innerHTML = "";
+  if (L) {
+    $("sub").textContent = L.ja;
+    if ($("showEn").checked) { const s = document.createElement("small"); s.textContent = L.en; $("sub").appendChild(s); }
+  }
+});
+
+const setOrig = () => { v.volume = $("orig").value / 100; $("origv").textContent = $("orig").value + "%"; };
+$("orig").oninput = setOrig;
+setOrig();
+$("start").onclick = () => {  // 音を鳴らすのはユーザーの操作のあとでないとブラウザが許さないので、ボタンで始める
+  ctx = new AudioContext();
+  $("start").remove();
+  v.play();
+};
+</script>
+</body>
+</html>
