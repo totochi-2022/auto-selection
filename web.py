@@ -707,6 +707,9 @@ class App:
                            **({"duration": video["duration"]} if video.get("duration") else {})})
 
     def play(self, video):
+        # ブラウザで再生するモードでは、YouTube のライブ（長さ 0）は落とせないので Brave の YouTube のページで
+        if self.web and not video.get("duration") and media_key(video) == video.get("id"):
+            video = {**video, "browser": True, "live": True, "url": f"https://www.youtube.com/watch?v={video['id']}"}
         if video.get("browser"):
             return self._play_browser(video)
         if self.web:
@@ -794,6 +797,9 @@ class App:
         m = self.YT_ID.search(url)
         if m:
             info = self._probe(f"https://www.youtube.com/watch?v={m.group(1)}", False) or {}
+            if info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming"):
+                return {"id": m.group(1), "url": f"https://www.youtube.com/watch?v={m.group(1)}", "browser": True, "live": True,
+                        "title": info.get("title") or title or url, "duration": 0, "channel": info.get("channel")}
             return {"id": m.group(1), "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
                     "channel": info.get("channel")}
         info = self._probe(url, False)
@@ -889,7 +895,7 @@ class App:
         with self.lock:
             keep = ([self.now] if self.now else []) + self.queue[:1]
         for v in keep[1:] if self.now else keep:
-            if not v.get("browser"):  # Brave で開くものは落とさない
+            if not v.get("browser") and (v.get("duration") or media_key(v) != v.get("id")):  # Brave で開くもの・ライブは落とさない
                 self.media.fetch(v)
         self.media.keep_only({media_key(v) for v in keep})
         self._dub_ahead()
