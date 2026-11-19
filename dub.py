@@ -74,11 +74,12 @@ def fetch_cues(video_id, max_sec=None):
 
 def translate(cues, lang="en", progress=None):
     """字幕の行を日本語の文にまとめて訳す（日本語の字幕なら訳さずに整える）。[{"i": 最初の行, "j": 最後の行, "sp": "M"|"F", "ja": 訳}]"""
-    out = []
+    out, cast = [], {}  # cast：これまでの登場人物 呼び名 -> M/F（分けて訳すので、呼び名がぶれないよう毎回渡す）
     for k in range(0, len(cues), CHUNK):
         part = cues[k:k + CHUNK]
         lines = "\n".join(f"[{k + n}] ({c['t']:.1f}s) {c['text']}" for n, c in enumerate(part))
         prev = out[-1]["ja"] if out else "(なし)"
+        known = "、".join(f"{w}（{g}）" for w, g in cast.items()) or "(まだなし)"
         what = ("動画の日本語の字幕を、吹き替えの台本に整えてください（訳し直さない）" if lang == "ja"
                 else "英語の動画の字幕を、日本語の吹き替えの台本にしてください")
         obj = at.ask_claude(f"""{what}。
@@ -86,17 +87,23 @@ def translate(cues, lang="en", progress=None):
 - 字幕の行は途中で切れているので、続いている行をまとめて、自然な日本語の文にする（1 文はだいたい 2〜4 行分）
 - 吹き替えなので話し言葉で、元の字幕の時間に収まるよう短めにする（意味は落とさない）
 - [Music]・[Applause]・(laughs)・♪ のような音や効果の説明は読まないので、その行は "ja" を空にする
-- ">>" は話す人が変わる印。話しているのが男性（M）か女性（F）かを、印と話の流れで決める（分からなければ前の文と同じ）
+- ">>" は話す人が変わる印。誰が話しているか（who）を、印・呼びかけ・話の流れで決める。
+  名前が分かれば名前（カタカナ）、分からなければ「男1」「女1」「ナレーター」のような呼び名。同じ人には必ず同じ呼び名を使う
+  （これまでの登場人物の呼び名を優先して使う）。男性（M）か女性（F）かも決める（分からなければ前の文と同じ人）
 - 番号は抜けや重なりなく、[{k}] から [{k + len(part) - 1}] まで全部をどれかの文に入れる
 
+これまでの登場人物: {known}
 直前の文（参考）: {prev}
 
 字幕:
 {lines}
 
 次の JSON だけを出力してください（説明は不要）:
-{{"s": [{{"i": 最初の行の番号, "j": 最後の行の番号, "sp": "M" または "F", "ja": "日本語"}}]}}""")
+{{"s": [{{"i": 最初の行の番号, "j": 最後の行の番号, "who": "話している人の呼び名", "sp": "M" または "F", "ja": "日本語"}}]}}""")
         got = [x for x in (obj or {}).get("s") or [] if isinstance(x, dict) and speakable(x.get("ja"))]
+        for x in got:
+            if x.get("who"):
+                cast.setdefault(str(x["who"]), x.get("sp", "M"))
         log(f"訳した: {k}〜{k + len(part) - 1} 行 → {len(got)} 文")
         out += got
         if progress:
@@ -109,6 +116,24 @@ def speakable(ja):
     import re
     t = re.sub(r"[（(［\[【][^）)］\]】]*[）)］\]】]|♪", "", ja or "").strip()
     return bool(t)
+
+
+MALE_VOICES = [13, 11, 12, 21, 52, 53]   # 青山龍星・玄野武宏・白上虎太郎・剣崎雌雄・雀松朱司・麒ヶ島宗麟
+FEMALE_VOICES = [2, 8, 14, 10, 9, 3]     # 四国めたん・春日部つむぎ・冥鳴ひまり・雨晴はう・波音リツ・ずんだもん
+
+
+def cast_voices(script):
+    """登場人物（who）ごとに、出てきた順に声を割り当てる。{呼び名: 話者番号}"""
+    voices, nm, nf = {}, 0, 0
+    for s in script:
+        w = str(s.get("who") or s.get("sp") or "M")
+        if w in voices:
+            continue
+        if s.get("sp") == "F":
+            voices[w] = FEMALE_VOICES[nf % len(FEMALE_VOICES)]; nf += 1
+        else:
+            voices[w] = MALE_VOICES[nm % len(MALE_VOICES)]; nm += 1
+    return voices
 
 
 def tts(text, speaker, speed):
