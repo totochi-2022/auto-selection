@@ -85,6 +85,7 @@ def translate(cues, lang="en", progress=None):
         obj = at.ask_claude(f"""{what}。
 
 - 字幕の行は途中で切れているので、続いている行をまとめて、自然な日本語の文にする（1 文はだいたい 2〜4 行分）
+- ただし ">>" の前と後ろは別の人のセリフなので、">>" をまたいで 1 つの文にまとめない（">>" のある行から新しい文にする）
 - 吹き替えなので話し言葉で、元の字幕の時間に収まるよう短めにする（意味は落とさない）
 - [Music]・[Applause]・(laughs)・♪ のような音や効果の説明は読まないので、その行は "ja" を空にする
 - ">>" は話す人が変わる印。誰が話しているか（who）を、印・呼びかけ・話の流れで決める。
@@ -151,8 +152,21 @@ def assign_roles(lines):
             lines[n]["who"] = str(r["who"])
             lines[n]["sp"] = cast.get(lines[n]["who"], lines[n].get("sp", "M"))
             got += 1
+    fix_self_address(lines, cast)
     log(f"配役を決め直した: {got}/{len(lines)} 文、登場人物 {len(cast)} 人 {cast}")
     return lines
+
+
+def fix_self_address(lines, cast):
+    """自分の名前を呼んでいるセリフ（「セス、よく聞け」をセスが言う）は、直前に話していた別の人のセリフにする"""
+    names = [w for w in cast if len(w) >= 2 and not w.startswith(("男", "女"))]
+    for n, x in enumerate(lines):
+        w = x.get("who")
+        if w in names and w in (x.get("ja") or ""):
+            prev = next((lines[k]["who"] for k in range(n - 1, -1, -1) if lines[k].get("who") not in (None, w)), None)
+            if prev:
+                log(f"自分の名前を呼んでいるので {w} → {prev}: {x['ja'][:30]}")
+                x["who"], x["sp"] = prev, cast.get(prev, x.get("sp", "M"))
 
 
 MALE_VOICES = [13, 11, 12, 21, 52, 53]   # 青山龍星・玄野武宏・白上虎太郎・剣崎雌雄・雀松朱司・麒ヶ島宗麟
