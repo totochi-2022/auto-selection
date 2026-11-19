@@ -238,7 +238,7 @@ def make_script(video_id, orig=None, progress=None, on_partial=None, meta=None):
                                        "lines": lines}, "", meta)
                 saved += 1
                 if on_partial:
-                    on_partial()
+                    on_partial(covered)
     lines = to_lines(cues, [x for k in starts for x in done[k]])
     if not lines:
         raise RuntimeError("台本を作れませんでした")

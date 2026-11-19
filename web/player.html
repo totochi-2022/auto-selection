@@ -44,6 +44,9 @@
   button.b:hover, button.b:focus-visible { border-color: var(--accent); outline: none; }
   #status { color: var(--dim); font-size: 12px; padding: 0 14px 10px; }
   @media (max-width: 800px) { body { flex-direction: column; } #side { flex: 0 0 40%; border-left: 0; border-top: 1px solid var(--line); } }
+  #pbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: rgba(255,255,255,.12); }
+  #pbar > div { position: absolute; left: 0; top: 0; bottom: 0; width: 0; }
+  #pbDub { background: rgba(60,130,255,.55); } #pbFill { background: rgba(255,255,255,.85); }
   #dsub { position: absolute; left: 4%; right: 4%; bottom: 9%; text-align: center; font-size: 30px; line-height: 1.4;
           color: #fff; text-shadow: 0 0 6px #000, 0 0 3px #000; pointer-events: none; }
 </style>
@@ -51,7 +54,7 @@
 <body>
 <div id="stage">
   <div id="wrap">
-    <video id="v" playsinline disableremoteplayback></video><div id="dsub"></div><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
+    <video id="v" playsinline disableremoteplayback></video><div id="dsub"></div><div id="pbar"><div id="pbDub"></div><div id="pbFill"></div></div><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
     <div id="veil">希望をリモコンで入れて「スタート」すると、ここで再生します</div>
     <button class="b" id="unmute" hidden>🔇 音が消えています（押すと音を出す）</button>
   </div>
@@ -135,6 +138,7 @@ function render() {
     return;
   }
   setDub(s.now.id, st === "ready" && ds ? ds.st : "");
+  dubCovered = ds && ds.st === "ready" ? Infinity : ds && ds.st === "partial" ? (ds.covered || 0) : 0;
   if (st === "ready") {
     veil.classList.add("hidden");
     if (v.dataset.key !== key) {
@@ -167,6 +171,12 @@ v.addEventListener("volumechange", () => { if (!v.muted) $("unmute").hidden = tr
 // 先の LOOKAHEAD 秒を先回り。止める・飛ばす・速さにもついていく。途中までの台本（partial）は 15 秒ごとに読み直して続きを足す。
 // 元の音は DUB_ORIG 倍に下げる。日本語の字幕も出す
 const DUB_ORIG = 0.25, LOOKAHEAD = 8, VOICE = { M: 13, F: 3 };
+let dubCovered = 0;  // 吹き替えがあるところ（秒、全部なら Infinity）。下の細いバーで青く出す
+setInterval(() => {
+  const d = v.duration || 0;
+  $("pbFill").style.width = d ? Math.min(100, v.currentTime / d * 100) + "%" : "0";
+  $("pbDub").style.width = d && dubKey ? Math.min(100, dubCovered / d * 100) + "%" : "0";
+}, 500);
 let dubKey = "", dubLines = [], dubPartial = false, dubFetchAt = 0, baseVol = 1, actx = null, gain = null;
 const dubCache = new Map(), dubSched = new Map();
 function applyVol() {

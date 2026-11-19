@@ -286,6 +286,7 @@ class Dubber:
         self.on_change = on_change
         self.cv = threading.Condition()
         self.state, self.progress, self.todo = {}, {}, []
+        self.covered = {}  # 途中までの台本が何秒まで訳せたか（シークバーに出す）
         self._last = 0
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -330,7 +331,10 @@ class Dubber:
                     self._set(vid, self.state.get(vid) if self.state.get(vid) == "partial" else "working", force=False)
                 self._set(vid, "working")
                 # 元の言語（ar・he など）の字幕も探す。頭から訳せたところまでで partial にする（流し始められる）
-                dubmod.make_script(vid, orig=lang, progress=prog, on_partial=lambda vid=vid: self._set(vid, "partial"))
+                def partial(covered, vid=vid):
+                    self.covered[vid] = covered
+                    self._set(vid, "partial")
+                dubmod.make_script(vid, orig=lang, progress=prog, on_partial=partial)
                 self._set(vid, "ready")
                 log(f"吹き替えができた: {vid}")
             except RuntimeError as e:  # 字幕が無いなど
@@ -465,7 +469,8 @@ class App:
             k = v.get("id") or ""
             st = self.dub.state.get(k)
             if st:
-                out[k] = {"st": st, "msg": self.dub.progress.get(k, "") if st in ("working", "partial") else ""}
+                out[k] = {"st": st, "msg": self.dub.progress.get(k, "") if st in ("working", "partial") else "",
+                          "covered": self.dub.covered.get(k) if st == "partial" else None}
         return out
 
     def _dub_ahead(self):
