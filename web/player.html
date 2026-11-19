@@ -49,7 +49,7 @@
 <body>
 <div id="stage">
   <div id="wrap">
-    <video id="v" playsinline disableremoteplayback></video><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
+    <video id="v" playsinline disableremoteplayback></video><audio id="dub" preload="auto"></audio><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
     <div id="veil">希望をリモコンで入れて「スタート」すると、ここで再生します</div>
     <button class="b" id="unmute" hidden>🔇 音が消えています（押すと音を出す）</button>
   </div>
@@ -111,7 +111,10 @@ function render() {
   ]);
   $("status").textContent = s.status || "";
   $("title").textContent = s.now ? s.now.title : "—";
-  $("chan").textContent = s.now ? (s.now.channel || "") : "";
+  // 吹き替え（英語の動画、web.py の Dubber）：できていれば重ねる。作っている間は進み具合を出す
+  const ds = s.now ? (s.dub || {})[s.now.id] : null;
+  $("chan").textContent = s.now ? (s.now.channel || "") + (ds && ds.st === "ready" ? "　🗣 吹き替え"
+    : ds && ds.st === "working" ? `　🗣 吹き替えを作っています（${ds.msg}）` : ds && ds.st === "checking" ? "　🗣 言語を確かめています" : "") : "";
   document.title = s.now ? `▶ ${s.now.title} - autotube プレーヤー` : "autotube プレーヤー";  // F7（f7-switch）が窓のタイトルで見分ける
 
   // 再生する動画
@@ -124,6 +127,7 @@ function render() {
     if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
     return;
   }
+  setDub(key, st === "ready" && ds && ds.st === "ready");
   if (st === "ready") {
     veil.classList.add("hidden");
     if (v.dataset.key !== key) {
@@ -151,10 +155,32 @@ async function startPlay() {
 $("unmute").onclick = () => { v.muted = false; $("unmute").hidden = true; v.play().catch(() => {}); };
 v.addEventListener("volumechange", () => { if (!v.muted) $("unmute").hidden = true; });
 
+// 吹き替えの音：映像の位置に合わせて流す（止める・飛ばす・速さにもついていく）。元の音は DUB_ORIG 倍に下げる
+const dub = $("dub"), DUB_ORIG = 0.25;
+let dubKey = "", baseVol = 1;
+function applyVol() { v.volume = baseVol * (dubKey ? DUB_ORIG : 1); dub.volume = baseVol; dub.muted = v.muted; }
+function dubSync(force) {
+  if (!dubKey || !dub.src) return;
+  if (Math.abs(dub.currentTime - v.currentTime) > (force ? 0.05 : 0.35)) dub.currentTime = v.currentTime;
+  dub.playbackRate = v.playbackRate;
+  if (v.paused || v.ended) dub.pause(); else dub.play().catch(() => {});
+}
+function setDub(key, ready) {
+  if (ready && dubKey !== key) {
+    dubKey = key; dub.src = `/dub/${encodeURIComponent(key)}`; dub.load(); applyVol();
+  } else if (!ready && dubKey) {
+    dub.pause(); dub.removeAttribute("src"); dub.load(); dubKey = ""; applyVol();
+  }
+}
+dub.addEventListener("canplay", () => dubSync(true));
+for (const ev of ["play", "pause", "seeked", "ratechange"]) v.addEventListener(ev, () => dubSync(true));
+v.addEventListener("timeupdate", () => dubSync(false));
+v.addEventListener("volumechange", () => { dub.muted = v.muted; });
+
 v.addEventListener("ended", () => post("next"));
 v.addEventListener("error", () => { if (v.dataset.key) $("veil").textContent = "再生できませんでした（⏭ 次へ）"; });
 let lastPos = 0;
-const sendPos = () => post("webpos", { pos: v.currentTime, dur: v.duration || 0, paused: v.paused, muted: v.muted, volume: v.volume });
+const sendPos = () => post("webpos", { pos: v.currentTime, dur: v.duration || 0, paused: v.paused, muted: v.muted, volume: baseVol });
 v.addEventListener("timeupdate", () => { if (Date.now() - lastPos > 2000) { lastPos = Date.now(); sendPos(); } $("pos").textContent = `${fmt(v.currentTime)} / ${fmt(v.duration)}`; });
 v.addEventListener("pause", sendPos);
 v.addEventListener("play", sendPos);
@@ -172,7 +198,7 @@ function applyCtl(c) {
   if (!v.dataset.key) return;
   if (c.cmd === "pause") v.paused ? v.play().catch(() => {}) : v.pause();
   else if (c.cmd === "seek") v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + Number(c.arg || 0)));
-  else if (c.cmd === "volume") { v.volume = Math.max(0, Math.min(1, Number(c.arg) / 100)); v.muted = false; }
+  else if (c.cmd === "volume") { baseVol = Math.max(0, Math.min(1, Number(c.arg) / 100)); v.muted = false; applyVol(); }
   else if (c.cmd === "mute") v.muted = !v.muted;
   sendPos();
 }

@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import autotube as at
+import dub as dubmod  # 英語の動画の吹き替え（ずんだもんたち）
 
 HOST = os.environ.get("AUTOTUBE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AUTOTUBE_PORT", "8766"))  # 8765 は phone-input が使う
@@ -218,13 +219,17 @@ def media_key(video):
 class Media:
     """動画ファイルを先に落としておく係。状態は key -> loading / ready / error"""
 
-    def __init__(self, on_change):
+    def __init__(self, on_change, keep=()):
         self.on_change = on_change
         self.lock = threading.Lock()
         self.state = {}
         MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-        for f in MEDIA_DIR.iterdir():  # 前回の起動の残り（途中で止まったものも）は消す
-            f.unlink(missing_ok=True)
+        for f in MEDIA_DIR.iterdir():  # 前回の起動の残り（途中で止まったものも）は消す。keep（起動し直す前に流していた動画）は残す
+            if f.name.split(".")[0] not in keep or ".part" in f.name:
+                f.unlink(missing_ok=True)
+        for k in keep:
+            if self.path(k):
+                self.state[k] = "ready"
 
     def path(self, key):
         if not re.fullmatch(r"[\w-]+", key):
@@ -271,6 +276,73 @@ class Media:
                 f.unlink(missing_ok=True)
 
 
+class Dubber:
+    """英語の動画の吹き替えを裏で 1 本ずつ作っておく係（リモコンの「英語も（吹き替え）」のとき）。
+    状態は key -> checking（言語を確かめ中）/ working（作っている、progress に段階と数）/ ready / none（日本語・字幕なし）/ error"""
+
+    def __init__(self, on_change):
+        self.on_change = on_change
+        self.cv = threading.Condition()
+        self.state, self.progress, self.todo = {}, {}, []
+        self._last = 0
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def want(self, video):
+        vid = video.get("id") or ""
+        if media_key(video) != vid:  # YouTube の動画だけ
+            return
+        with self.cv:
+            if vid in self.state:
+                return
+            if dubmod.dub_path(vid).exists():
+                self.state[vid] = "ready"
+            else:
+                self.state[vid] = "checking"
+                self.todo.append(vid)
+                self.cv.notify()
+        self.on_change()
+
+    def path(self, key):
+        if not re.fullmatch(r"[\w-]+", key):
+            return None
+        f = dubmod.dub_path(key)
+        return f if f.exists() else None
+
+    def _set(self, vid, st, force=True):
+        with self.cv:
+            self.state[vid] = st
+        if force or time.time() - self._last > 2:  # 進み具合は 2 秒に 1 回だけ知らせる
+            self._last = time.time()
+            self.on_change()
+
+    def _loop(self):
+        while True:
+            with self.cv:
+                while not self.todo:
+                    self.cv.wait()
+                vid = self.todo.pop(0)
+            try:
+                lang = at.video_language(vid)
+                if lang is None or lang.split("-")[0] == "ja":  # 日本語（分からないものも）は吹き替えない
+                    self._set(vid, "none")
+                    continue
+                log(f"吹き替えを作ります: {vid}（{lang}）")
+
+                def prog(stage, k, n, vid=vid):
+                    self.progress[vid] = f"{'訳しています' if stage == 'translate' else '声にしています'} {k}/{n}"
+                    self._set(vid, "working", force=False)
+                self._set(vid, "working")
+                dubmod.dub_video(vid, prog)
+                self._set(vid, "ready")
+                log(f"吹き替えができた: {vid}")
+            except RuntimeError as e:  # 字幕が無いなど
+                log(f"吹き替えなし: {vid} {e}")
+                self._set(vid, "none")
+            except Exception as e:
+                log(f"吹き替えに失敗: {vid} {e!r}")
+                self._set(vid, "error")
+
+
 class App:
     def __init__(self):
         self.lock = threading.RLock()
@@ -302,15 +374,48 @@ class App:
         self.mpv = Mpv(self.on_mpv_event)
         self.web = False           # ブラウザで再生するモード（/player のページを開くとオン）
         self.ctl = {"id": 0}       # ブラウザで再生中にリモコンから来た操作（一時停止など）。番号が増えたらページが実行する
-        self.media = Media(self.changed)
+        self._restore()
+        keep = {media_key(v) for v in ([self.now] if self.now else []) + self.queue[:1]}
+        self.media = Media(self.changed, keep)
+        self.dub = Dubber(self.changed)
+        threading.Thread(target=self._dub_ahead, daemon=True).start()  # 起動し直す前のキューの分も
         # mpv の起動し直しを同時に 2 つ走らせない（走ると古い mpv が止められずに残り、画面に映り続ける）
         self.load_lock = threading.Lock()
+
+    # ---- 起動し直しても希望・今の動画・キューを覚えておく（web.py を直して起動し直すたびに消えないように）----
+    STATE_FILE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "autotube" / "web-state.json"
+    SAVED = ("request", "opts", "queries", "claude_live", "kind", "filters", "traits", "channel", "radio",
+             "now", "queue", "web")
+
+    def _restore(self):
+        try:
+            d = json.loads(self.STATE_FILE.read_text())
+            if time.time() - d.get("t", 0) > 6 * 3600:  # 6 時間より前のものは使わない
+                return
+        except (OSError, ValueError):
+            return
+        for k in self.SAVED:
+            if k in d:
+                setattr(self, k, d[k])
+        if self.now or self.queue:
+            self.status = "起動し直す前の続きです"
+        log(f"前の状態を読み込みました: {self.request!r} キュー {len(self.queue)} 本")
+
+    def _save(self):
+        try:
+            self.STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.STATE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"t": time.time(), **{k: getattr(self, k) for k in self.SAVED}}, ensure_ascii=False))
+            tmp.replace(self.STATE_FILE)
+        except (OSError, TypeError, ValueError):
+            pass
 
     # ---- 状態の通知 ----
     def changed(self):
         with self.cond:
             self.version += 1
             self.cond.notify_all()
+        self._save()
 
     def ticking(self, msg):
         """長く待つ処理の間、経過秒数を付けて状態を出し続ける。止めるときは返り値の関数を呼ぶ"""
@@ -339,7 +444,7 @@ class App:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
                     "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player,
-                    "web": self.web, "media": self._media_snapshot(), "ctl": self.ctl,
+                    "web": self.web, "media": self._media_snapshot(), "dub": self._dub_snapshot(), "ctl": self.ctl,
                     "can_show": self.WIN_FOCUS.exists()}
 
     def _media_snapshot(self):
@@ -352,6 +457,25 @@ class App:
             v["key"] = k
             out[k] = self.media.state.get(k, "")
         return out
+
+    def _dub_snapshot(self):
+        """今とキューの動画の吹き替えの状態（key -> {st, msg}）"""
+        out = {}
+        for v in ([self.now] if self.now else []) + self.queue:
+            k = v.get("id") or ""
+            st = self.dub.state.get(k)
+            if st:
+                out[k] = {"st": st, "msg": self.dub.progress.get(k, "") if st == "working" else ""}
+        return out
+
+    def _dub_ahead(self):
+        """「英語も（吹き替え）」のとき、今とキューの動画の吹き替えを裏で作っておく（1 本 10 分ほどかかるので早めに）"""
+        with self.lock:
+            if not self.opts.get("en"):
+                return
+            vids = ([self.now] if self.now else []) + self.queue
+        for v in vids:
+            self.dub.want(v)
 
     # ---- 選定 ----
     def start(self, request, opts):
@@ -531,6 +655,7 @@ class App:
                 if gen == self.gen:
                     self.picking = False
             self.changed()
+        self._dub_ahead()
         if play_now:
             self.next()
 
@@ -614,6 +739,7 @@ class App:
         for v in keep[1:] if self.now else keep:
             self.media.fetch(v)
         self.media.keep_only({media_key(v) for v in keep})
+        self._dub_ahead()
 
     def set_web(self, on):
         """ブラウザで再生するモードの切り替え。オンにすると mpv は止める。オフにすると今の動画を mpv で頭から"""
@@ -1308,6 +1434,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/media/"):
             self._media(path.removeprefix("/media/"))
+        elif path.startswith("/dub/"):  # 吹き替えの音（WAV）
+            self._media(path.removeprefix("/dub/"), app.dub.path)
         elif path == "/api/openhosts":
             self._send(200, json.dumps(app.open_hosts()))
         elif path == "/api/bookmarks":
@@ -1339,9 +1467,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, json.dumps({"error": str(e)}))
         self._send(200, '{"ok":true}')
 
-    def _media(self, key):
-        """ブラウザで再生する動画ファイルを配る。シークのために部分の取得（Range）に対応"""
-        f = app.media.path(key)
+    def _media(self, key, find=None):
+        """ブラウザで再生する動画ファイル（と吹き替えの音）を配る。シークのために部分の取得（Range）に対応"""
+        f = (find or app.media.path)(key)
         if not f:
             return self._send(404, '{"error":"not found"}')
         size = f.stat().st_size
