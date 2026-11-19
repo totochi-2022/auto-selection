@@ -762,7 +762,7 @@ class App:
             request = self.request
         self._played(video, request)
         self.open_bookmark(video["url"], "exact", solo=True)  # 同じ URL のタブがもうあればそこへ
-        threading.Timer(4.0, self._browser_full).start()
+        threading.Timer(8.0, self._browser_full).start()  # 4 秒だとページが読み込み中で F9 が効かなかった
         if self.web:
             self._prefetch()
         self.changed()
