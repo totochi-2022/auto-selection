@@ -89,6 +89,9 @@ def main():
     src = D / (f"{a.video_id}.{a.src}.script.json" if a.src else f"{a.video_id}.script.json")
     d = json.loads(src.read_text())
     lines = d["lines"]
+    for L in lines:  # 配役を丁寧に決めていない台本（普通の動画）：男女だけで「男性」「女性」の 2 人とみなす
+        if not L.get("who"):
+            L["who"] = "女性" if L.get("sp") == "F" else "男性"
     video = next(f for f in D.glob(f"{a.video_id}.video.*") if ".part" not in f.name)
     audio = np.frombuffer(subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(video), "-vn", "-ac", "1", "-ar",
                                           str(SR), "-f", "f32le", "-"], capture_output=True).stdout, dtype="float32")
