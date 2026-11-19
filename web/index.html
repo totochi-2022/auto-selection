@@ -220,7 +220,9 @@
     <label class="autorow" title="オン：リストが減ったら希望に合わせて選んで足す（流し見）。オフ：リストにあるものだけ流して止まる（じっくり見る）">
       <input type="checkbox" id="optAuto"> 自動で足す（流し見）</label>
     <form class="addrow" id="addForm" autocomplete="off">
-      <button type="button" id="addPaste" title="クリップボードの URL を貼る">📋</button>
+      <button type="button" id="addPaste" title="スマホのクリップボードの URL を貼る">📋</button>
+      <button type="button" id="addPc" title="テレビの PC でコピーした URL を貼る">🖥</button>
+      <button type="button" id="addCur" title="テレビの Brave で今見ているタブを貼る">📺</button>
       <input id="addUrl" type="url" placeholder="URL を貼ってリストに足す（アニメのページなども）">
       <button type="submit" data-where="next" title="次に流す">次に</button>
       <button type="submit" data-where="end" class="primary" title="リストの最後に">＋ 最後に</button>
@@ -277,8 +279,9 @@ $("addForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("addUrl").value.trim();
   if (!url) return $("addUrl").focus();
-  api("add", { url, where: (e.submitter && e.submitter.dataset.where) || "end" });
-  $("addUrl").value = "";
+  const title = $("addUrl").dataset.title || "";  // 📺 で入れたときはタブのタイトル（Brave で開くものの名前に）
+  api("add", { url, title, where: (e.submitter && e.submitter.dataset.where) || "end" });
+  $("addUrl").value = ""; $("addUrl").dataset.title = "";
 });
 
 // 📋：クリップボードの文字から URL を取り出して欄に入れる（共有の文のように前後に文字があっても）
@@ -292,6 +295,18 @@ $("addPaste").addEventListener("click", async () => {
     $("status").textContent = "クリップボードを読めませんでした（https のページで、読み取りを許可してください）";
     $("addUrl").focus();
   }
+});
+
+// 🖥：テレビの PC のクリップボード、📺：テレビの Brave の今のタブ
+$("addPc").addEventListener("click", async () => {
+  const t = (await (await fetch("/api/pcclip", { headers: { "X-Token": token } })).json()).text || "";
+  const m = t.match(/https?:\/\/\S+/);
+  if (m) $("addUrl").value = m[0]; else $("status").textContent = "PC のクリップボードに URL がありません";
+});
+$("addCur").addEventListener("click", async () => {
+  const t = await (await fetch("/api/curtab", { headers: { "X-Token": token } })).json();
+  if (t && /^https?:/.test(t.url) && !/^https?:\/\/127\.0\.0\.1/.test(t.url)) { $("addUrl").value = t.url; $("addUrl").dataset.title = t.title || ""; }
+  else $("status").textContent = "今のタブは足せるページではありません（端末・プレーヤー・新しいタブなど）";
 });
 
 // リストの並べ替え：≡ を押さえて上下に。離したところへ動かす（タッチでも動くよう pointer で自前に）

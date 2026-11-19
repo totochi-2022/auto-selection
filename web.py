@@ -836,6 +836,27 @@ class App:
             self._prefetch()
         self.changed()
 
+    @staticmethod
+    def pc_clip():
+        if not shutil.which("wl-paste"):
+            return ""
+        try:
+            return subprocess.run(["wl-paste", "-n", "-t", "text"], capture_output=True, text=True, timeout=2,
+                                  env=at.mpv_env()).stdout[:4000]
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    @staticmethod
+    def cur_tab():
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if not tvfs.exists():
+            return None
+        try:
+            r = subprocess.run([str(tvfs), "current"], capture_output=True, text=True, timeout=3, env=at.mpv_env())
+            return json.loads(r.stdout) if r.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+
     def history(self, n=60):
         """流した動画の履歴（新しい順、同じ動画は最後の 1 回だけ）"""
         out, seen = [], set()
@@ -1611,6 +1632,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, buf.getvalue(), "audio/wav")
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}))
+        elif path == "/api/pcclip":  # テレビの PC のクリップボード（PC でコピーした URL をリモコンで貼る）
+            self._send(200, json.dumps({"text": app.pc_clip()}, ensure_ascii=False))
+        elif path == "/api/curtab":  # テレビの Brave の手前のタブ（今のタブをリストに足す）
+            self._send(200, json.dumps(app.cur_tab(), ensure_ascii=False))
         elif path == "/api/history":
             self._send(200, json.dumps(app.history(), ensure_ascii=False))
         elif path == "/api/openhosts":
