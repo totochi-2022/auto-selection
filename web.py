@@ -28,6 +28,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import autotube as at
+import sites
 import dub as dubmod  # 英語の動画の吹き替え（ずんだもんたち）
 
 HOST = os.environ.get("AUTOTUBE_HOST", "0.0.0.0")
@@ -751,48 +752,6 @@ class App:
         self.changed()
         self.refill()
 
-    @staticmethod
-    def _page_meta(url):
-        """ページの題名（og:title か <title>）と画像（og:image）"""
-        import urllib.request
-        try:
-            page = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=10) \
-                .read(400000).decode("utf-8", "replace")
-        except (OSError, ValueError):
-            return {}
-        def og(name):
-            m = re.search(rf'<meta[^>]+property=["\']og:{name}["\'][^>]+content=["\']([^"\']+)', page) \
-                or re.search(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:{name}["\']', page)
-            return html.unescape(m.group(1)).strip() if m else ""
-        t = og("title")
-        if not t:
-            m = re.search(r"<title[^>]*>([^<]+)", page)
-            t = html.unescape(m.group(1)).strip() if m else ""
-        return {"title": t, "image": og("image")}
-
-    @staticmethod
-    def embed_url(url):
-        """プレーヤーに埋め込む URL。YouTube は埋め込み用、gogoanime は中のプレーヤー（megaplay など）だけ。
-        中の URL は期限などがあるので残さず、流すたびにページから取り出す。見つからなければページごと"""
-        m = App.YT_ID.search(url)
-        if m:
-            return f"https://www.youtube.com/embed/{m.group(1)}?autoplay=1"
-        host = urlparse(url).hostname or ""
-        if "gogoanime" in host:
-            import urllib.request
-            ua = {"User-Agent": "Mozilla/5.0", "Referer": f"https://{host}/"}
-            try:
-                page = urllib.request.urlopen(urllib.request.Request(url, headers=ua), timeout=15).read().decode("utf-8", "replace")
-                mp = re.search(r'data-src="(https://[^"]+/player/\?[^"]+)"', page)
-                if mp:
-                    player = html.unescape(mp.group(1))
-                    inner = urllib.request.urlopen(urllib.request.Request(player, headers=ua), timeout=15).read().decode("utf-8", "replace")
-                    mi = re.search(r'https://[\w.-]+/(?:embed|e|v)[^"\'<>\s]*', inner)
-                    return mi.group(0) if mi else player
-            except (OSError, ValueError) as e:
-                log(f"埋め込みの URL を取れなかった: {url} {e}")
-        return url
-
     def _embed_start(self, video):
         """埋め込んだあと：プレーヤーのタブを前に出し、読み込まれたころに再生を押す（中のプレーヤーは自動では始まらないことが多い）"""
         self.show_video()
@@ -810,7 +769,7 @@ class App:
         埋め込む（YouTube は埋め込み用、gogoanime は中のプレーヤーだけ）。mpv のモードならテレビの Brave の新しいタブで開いて全画面。
         終わったら ⏭ 次へ（終わったことの知らせは拡張機能から、これから）"""
         if self.web:
-            video = {**video, "embed": self.embed_url(video["url"])}
+            video = {**video, "embed": sites.embed_url(video["url"], log)}
             with self.lock:
                 self.now = video
                 self.play_on_fill = False
@@ -898,8 +857,8 @@ class App:
                         "title": info.get("title") or title or url, "duration": 0, "channel": info.get("channel")}
             return {"id": m.group(1), "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
                     "channel": info.get("channel")}
-        # 埋め込みにそろえる方針：yt-dlp で落とせても、ページを埋め込んで流すサイト（あとで sites.py にまとめる）
-        if (urlparse(url).hostname or "").endswith(EMBED_HOSTS):
+        # 埋め込みにそろえる方針：yt-dlp で落とせても、ページを埋め込んで流すサイト（sites.py の download: False）
+        if sites.no_download(url):
             info = None
         else:
             info = self._probe(url, False)
@@ -911,7 +870,7 @@ class App:
                     "channel": info.get("uploader") or info.get("extractor_key"), "thumb": info.get("thumbnail")}
         host = urlparse(url).hostname or url
         if not title or not (info or {}).get("thumbnail"):  # yt-dlp で調べられないページ：ページの og:title・og:image から
-            meta = self._page_meta(url)
+            meta = sites.page_meta(url)
             title = title or meta.get("title", "")
             info = {**(info or {}), "thumbnail": (info or {}).get("thumbnail") or meta.get("image")}
         return {"id": "web:" + hashlib.sha1(url.encode()).hexdigest()[:12], "url": url, "browser": True,
@@ -1647,9 +1606,6 @@ class App:
 
 
 app = App()
-
-EMBED_HOSTS = ("abema.tv",)  # 落とさずにページを埋め込んで流すサイト（ABEMA の見逃しの回は 20 分で 700MB ほど落としていた）
-
 
 def wake_screen():
     """リモコンで操作したら、消えた画面（swayidle の wlopm --off）をつける。リモコンの操作は入力に数えられないため。
