@@ -220,6 +220,7 @@
     <label class="autorow" title="オン：リストが減ったら希望に合わせて選んで足す（流し見）。オフ：リストにあるものだけ流して止まる（じっくり見る）">
       <input type="checkbox" id="optAuto"> 自動で足す（流し見）</label>
     <form class="addrow" id="addForm" autocomplete="off">
+      <button type="button" id="addPaste" title="クリップボードの URL を貼る">📋</button>
       <input id="addUrl" type="url" placeholder="URL を貼ってリストに足す（アニメのページなども）">
       <button type="submit" data-where="next" title="次に流す">次に</button>
       <button type="submit" data-where="end" class="primary" title="リストの最後に">＋ 最後に</button>
@@ -278,6 +279,19 @@ $("addForm").addEventListener("submit", (e) => {
   if (!url) return $("addUrl").focus();
   api("add", { url, where: (e.submitter && e.submitter.dataset.where) || "end" });
   $("addUrl").value = "";
+});
+
+// 📋：クリップボードの文字から URL を取り出して欄に入れる（共有の文のように前後に文字があっても）
+$("addPaste").addEventListener("click", async () => {
+  try {
+    const t = await navigator.clipboard.readText();
+    const m = (t || "").match(/https?:\/\/\S+/);
+    $("addUrl").value = m ? m[0] : (t || "").trim();
+    if (!m) $("status").textContent = "クリップボードに URL がありません";
+  } catch (e) {
+    $("status").textContent = "クリップボードを読めませんでした（https のページで、読み取りを許可してください）";
+    $("addUrl").focus();
+  }
 });
 
 // リストの並べ替え：≡ を押さえて上下に。離したところへ動かす（タッチでも動くよう pointer で自前に）
