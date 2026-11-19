@@ -373,7 +373,9 @@ class App:
         self.stalls = 0                 # 今の動画で読み込み直した回数
         self.mpv = Mpv(self.on_mpv_event)
         self.web = False           # ブラウザで再生するモード（/player のページを開くとオン）
-        self.ctl = {"id": 0}       # ブラウザで再生中にリモコンから来た操作（一時停止など）。番号が増えたらページが実行する
+        # ブラウザで再生中にリモコンから来た操作（一時停止など）。番号が増えたらページが実行する。
+        # 番号は起動した時刻から始める（起動し直して 1 からにすると、開いたままのページが前の番号より小さいとみなして無視する）
+        self.ctl = {"id": int(time.time())}
         self._restore()
         keep = {media_key(v) for v in ([self.now] if self.now else []) + self.queue[:1]}
         self.media = Media(self.changed, keep)
