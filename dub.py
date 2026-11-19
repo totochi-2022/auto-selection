@@ -93,10 +93,37 @@ def _subs(video_id, langs, auto):
         return json.loads(files[0].read_text()).get("events") or []
 
 
-def fetch_cues(video_id, max_sec=None):
-    """字幕を [{"t": 開始秒, "d": 長さ秒, "text": 文}] と言語（"ja"＝作った人が用意した日本語の字幕／"en"）で返す。
-    日本語の字幕（自動翻訳でないもの）があればそれを使い、無ければ英語（手作り → 自動字幕）"""
+LANG_NAMES = {"en": "英語", "ar": "アラビア語", "he": "ヘブライ語", "iw": "ヘブライ語", "fa": "ペルシャ語", "tr": "トルコ語",
+              "ur": "ウルドゥー語", "ko": "韓国語", "zh": "中国語", "es": "スペイン語", "fr": "フランス語", "de": "ドイツ語",
+              "ru": "ロシア語", "pt": "ポルトガル語", "it": "イタリア語", "hi": "ヒンディー語", "id": "インドネシア語"}
+
+
+def lang_name(code):
+    return LANG_NAMES.get((code or "").split("-")[0], code or "外国語")
+
+
+def orig_lang(video_id):
+    """動画の元の言語（"en"・"ar"・"iw" など）。動画の情報（language）が無ければ、元の言語の自動字幕（"xx-orig"）から。
+    分からなければ None"""
+    try:
+        r = subprocess.run(["yt-dlp", "-J", "--skip-download", "--ignore-no-formats-error",
+                            "--extractor-args", "youtube:player_skip=js,configs",
+                            f"https://www.youtube.com/watch?v={video_id}"], capture_output=True, text=True, timeout=90)
+        d = json.loads(r.stdout) if r.returncode == 0 else {}
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    ac = d.get("automatic_captions") or {}
+    return d.get("language") or next((k[:-5] for k in ac if k.endswith("-orig")), None)
+
+
+def fetch_cues(video_id, max_sec=None, orig=None):
+    """字幕を [{"t": 開始秒, "d": 長さ秒, "text": 文}] と言語で返す。探す順：
+    日本語（作った人が用意したもの、自動翻訳でない）→ 動画の元の言語 orig（ar・he・fa など、手作り → 自動字幕）→ 英語"""
     lang, ev = "ja", _subs(video_id, "ja", auto=False)
+    base = (orig or "").split("-")[0]
+    if not ev and base and base not in ("ja", "en"):
+        codes = {base, "iw"} if base == "he" else {base}  # YouTube はヘブライ語を iw と書くことがある
+        lang, ev = base, _subs(video_id, ",".join(f"{c},{c}-orig" for c in codes), auto=True)
     if not ev:
         lang, ev = "en", _subs(video_id, "en.*,en", auto=True)
     if not ev:
@@ -122,7 +149,7 @@ def translate(cues, lang="en", progress=None):
         prev = out[-1]["ja"] if out else "(なし)"
         known = "、".join(f"{w}（{g}）" for w, g in cast.items()) or "(まだなし)"
         what = ("動画の日本語の字幕を、吹き替えの台本に整えてください（訳し直さない）" if lang == "ja"
-                else "英語の動画の字幕を、日本語の吹き替えの台本にしてください")
+                else f"{lang_name(lang)}の動画の字幕を、日本語の吹き替えの台本にしてください")
         obj = at.ask_claude(f"""{what}。
 
 - 字幕の行は途中で切れているので、続いている行をまとめて、自然な日本語の文にする（1 文はだいたい 2〜4 行分）
@@ -299,13 +326,13 @@ def dub_path(video_id):
     return OUT / f"{video_id}.ja.wav"
 
 
-def dub_video(video_id, progress=None):
+def dub_video(video_id, progress=None, orig=None):
     """動画を最後まで吹き替えて WAV の場所を返す（できていればそれ）。字幕が無ければ RuntimeError。
     progress(段階, 済み, 全体)：段階は translate（訳す）・voice（声にする）"""
     f = dub_path(video_id)
     if f.exists():
         return f
-    cues, lang = fetch_cues(video_id)
+    cues, lang = fetch_cues(video_id, orig=orig)
     log(f"{video_id}: 字幕 {len(cues)} 行（{lang}）")
     script = translate(cues, lang, progress)
     if not script:

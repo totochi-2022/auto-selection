@@ -322,7 +322,7 @@ class Dubber:
                     self.cv.wait()
                 vid = self.todo.pop(0)
             try:
-                lang = at.video_language(vid)
+                lang = dubmod.orig_lang(vid)  # 動画の情報か、元の言語の自動字幕から
                 if lang is None or lang.split("-")[0] == "ja":  # 日本語（分からないものも）は吹き替えない
                     self._set(vid, "none")
                     continue
@@ -332,7 +332,7 @@ class Dubber:
                     self.progress[vid] = f"{'訳しています' if stage == 'translate' else '声にしています'} {k}/{n}"
                     self._set(vid, "working", force=False)
                 self._set(vid, "working")
-                dubmod.dub_video(vid, prog)
+                dubmod.dub_video(vid, prog, orig=lang)  # 元の言語（ar・he など）の字幕も探す
                 self._set(vid, "ready")
                 log(f"吹き替えができた: {vid}")
             except RuntimeError as e:  # 字幕が無いなど
@@ -601,7 +601,7 @@ class App:
             kw = dict(newest=opts["newest"], channel=channel and channel["name"], kind=kind, traits=traits,
                       radio=radio and radio["title"])
             # 日本語の動画だけにする（外国語の希望・音楽・チャンネル指定のときはしない）。選んだ後に言語を確かめる
-            # en＝リモコンの「英語も（吹き替え）」：英語の動画も選ぶ（吹き替えはこれから）
+            # en＝リモコンの「外国語も（吹き替え）」：外国語の動画も選び、吹き替えて流す
             japanese = not foreign and not opts.get("en") and kind != "music" and not channel
             if opts["subs"]:
                 stopper = [lambda: None]
