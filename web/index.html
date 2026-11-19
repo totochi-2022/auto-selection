@@ -52,9 +52,10 @@
   .empty { color: var(--muted); }
   .progress { margin-top: 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .bar { flex: 1; height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; cursor: pointer; }
-  .bar { position: relative; }
+  .bar { position: relative; height: 10px; }
   .bar > div { position: absolute; left: 0; top: 0; height: 100%; background: var(--accent); width: 0; transition: width .4s linear; }
-  .bar > #barDub { background: #2f6fd0; opacity: .45; }
+  .bar > #barDub { top: auto; bottom: 0; height: 3px; background: #3fb950; }  /* 吹き替えがあるところ：下に細く緑 */
+  .bar > #barHead { width: 2px; background: #fff; transition: left .4s linear; }  /* 今の位置 */
   .controls { display: grid; grid-template-columns: repeat(10, 1fr); gap: 8px; margin-top: 12px; }
   button {
     font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
@@ -144,7 +145,7 @@
     <div id="now" class="empty">まだ何も再生していません</div>
     <div class="progress">
       <span id="pos">0:00</span>
-      <div class="bar" id="bar" title="クリックでその位置へ（青いところまで吹き替えあり）"><div id="barDub"></div><div id="barFill"></div></div>
+      <div class="bar" id="bar" title="クリックでその位置へ（下の緑のところまで吹き替えあり、白い線が今の位置）"><div id="barFill"></div><div id="barDub"></div><div id="barHead"></div></div>
       <span id="dur">0:00</span>
     </div>
     <div class="controls">
@@ -287,6 +288,7 @@ function render(s) {
   $("pos").textContent = fmt(p.pos);
   $("dur").textContent = p.dur ? fmt(p.dur) : (n && !n.duration ? "ライブ" : "0:00");
   $("barFill").style.width = p.dur ? Math.min(100, p.pos / p.dur * 100) + "%" : "0";
+  $("barHead").style.left = p.dur ? `calc(${Math.min(100, p.pos / p.dur * 100)}% - 1px)` : "0";
   // 吹き替えがあるところ（全部できていれば全体、途中までなら訳せたところまで）を青く
   const nd = s.now ? (s.dub || {})[s.now.id] : null;
   $("barDub").style.width = !nd || !p.dur ? "0" : nd.st === "ready" ? "100%" : nd.st === "partial" && nd.covered ? Math.min(100, nd.covered / p.dur * 100) + "%" : "0";
