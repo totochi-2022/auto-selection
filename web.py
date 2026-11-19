@@ -803,7 +803,7 @@ class App:
                 if self.now is not video:
                     return
             if tvfs.exists():
-                subprocess.run([str(tvfs), "video", "start"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([str(tvfs), "kick"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _play_browser(self, video):
         """mpv でもプレーヤーでも流せないサイト（アニメ・生放送など）。ブラウザで再生するモードなら、プレーヤーの画面の中に
