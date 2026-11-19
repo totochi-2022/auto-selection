@@ -95,7 +95,7 @@ class YTMedia extends EventTarget {
     if (!this.ready) {
       this.ready = new Promise((res) => {
         window.onYouTubeIframeAPIReady = () => {
-          this.p = new YT.Player("ytp", { videoId: id, playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+          this.p = new YT.Player("ytp", { videoId: id, playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3 },
             events: { onReady: () => { this.p.setVolume(this._vol * 100); res(); },
                       onStateChange: (e) => this._state(e.data),
                       onPlaybackRateChange: () => this._ev("ratechange"),
@@ -109,7 +109,11 @@ class YTMedia extends EventTarget {
   stop() { this.id = ""; if (this.p && this.p.stopVideo) this.p.stopVideo(); }
   _ev(type, detail) { const e = new Event(type); e.detail = detail; this.dispatchEvent(e); }
   _state(st) {
-    if (st === 1) { this._paused = false; this._ev("play"); }
+    if (st === 1) {
+      // YouTube の字幕（自動生成の日本語など）は出さない。埋め込みは前に字幕を出した設定を覚えていて勝手に出す
+      if (this._ccOff !== this.id) { this._ccOff = this.id; try { this.p.unloadModule("captions"); this.p.unloadModule("cc"); } catch (e) {} }
+      this._paused = false; this._ev("play");
+    }
     else if (st === 2) { this._paused = true; this._ev("pause"); }
     else if (st === 0) { this._paused = true; this._ev("ended"); }
     else if (st === 3) this._ev("seeking");
