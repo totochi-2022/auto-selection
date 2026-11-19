@@ -122,24 +122,31 @@ MALE_VOICES = [13, 11, 12, 21, 52, 53]   # 青山龍星・玄野武宏・白上�
 FEMALE_VOICES = [2, 8, 14, 10, 9, 3]     # 四国めたん・春日部つむぎ・冥鳴ひまり・雨晴はう・波音リツ・ずんだもん
 
 
+PITCHES = [0.0, -0.06, 0.06]  # 声の高さ（VOICEVOX の pitchScale）。声の種類が足りなくなったら高さを変えて別の人にする
+
+
 def cast_voices(script):
-    """登場人物（who）ごとに、出てきた順に声を割り当てる。{呼び名: 話者番号}"""
+    """登場人物（who）ごとに、出てきた順に声を割り当てる。{呼び名: [話者番号, 声の高さ]}。
+    声の種類を一巡させてから、高さを変えた組み合わせを使う（6 種類 × 3 段階）"""
     voices, nm, nf = {}, 0, 0
     for s in script:
         w = str(s.get("who") or s.get("sp") or "M")
         if w in voices:
             continue
+        pool, n = (FEMALE_VOICES, nf) if s.get("sp") == "F" else (MALE_VOICES, nm)
+        voices[w] = [pool[n % len(pool)], PITCHES[(n // len(pool)) % len(PITCHES)]]
         if s.get("sp") == "F":
-            voices[w] = FEMALE_VOICES[nf % len(FEMALE_VOICES)]; nf += 1
+            nf += 1
         else:
-            voices[w] = MALE_VOICES[nm % len(MALE_VOICES)]; nm += 1
+            nm += 1
     return voices
 
 
-def tts(text, speaker, speed):
+def tts(text, speaker, speed, pitch=0.0):
     q = json.loads(urllib.request.urlopen(urllib.request.Request(
         f"{VOICEVOX}/audio_query?speaker={speaker}&text={quote(text)}", method="POST"), timeout=60).read())
     q["speedScale"] = speed
+    q["pitchScale"] = pitch
     q["prePhonemeLength"] = q["postPhonemeLength"] = 0.05
     wav = urllib.request.urlopen(urllib.request.Request(
         f"{VOICEVOX}/synthesis?speaker={speaker}", data=json.dumps(q).encode(),

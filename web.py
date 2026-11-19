@@ -1456,7 +1456,8 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             try:
                 pcm = dubmod.tts(q.get("text", [""])[0][:400], int(q.get("sp", ["3"])[0]),
-                                 max(0.5, min(2.5, float(q.get("speed", ["1.15"])[0]))))
+                                 max(0.5, min(2.5, float(q.get("speed", ["1.15"])[0]))),
+                                 max(-0.15, min(0.15, float(q.get("pitch", ["0"])[0]))))
                 import io, wave
                 buf = io.BytesIO()
                 with wave.open(buf, "wb") as w:
