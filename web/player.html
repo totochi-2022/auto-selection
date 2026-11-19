@@ -44,12 +44,14 @@
   button.b:hover, button.b:focus-visible { border-color: var(--accent); outline: none; }
   #status { color: var(--dim); font-size: 12px; padding: 0 14px 10px; }
   @media (max-width: 800px) { body { flex-direction: column; } #side { flex: 0 0 40%; border-left: 0; border-top: 1px solid var(--line); } }
+  #dsub { position: absolute; left: 4%; right: 4%; bottom: 9%; text-align: center; font-size: 30px; line-height: 1.4;
+          color: #fff; text-shadow: 0 0 6px #000, 0 0 3px #000; pointer-events: none; }
 </style>
 </head>
 <body>
 <div id="stage">
   <div id="wrap">
-    <video id="v" playsinline disableremoteplayback></video><audio id="dub" preload="auto"></audio><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
+    <video id="v" playsinline disableremoteplayback></video><div id="dsub"></div><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
     <div id="veil">希望をリモコンで入れて「スタート」すると、ここで再生します</div>
     <button class="b" id="unmute" hidden>🔇 音が消えています（押すと音を出す）</button>
   </div>
@@ -83,7 +85,8 @@ const fmt = (s) => {
 };
 const thumb = (video) => /^[\w-]{11}$/.test(video.id || "") && !video.url ? `https://i.ytimg.com/vi/${video.id}/mqdefault.jpg` : "";
 const MEDIA_LABEL = { ready: "✓ 準備できた", loading: "⬇ 落としています…", error: "✗ 落とせなかった", "": "" };
-const dubLabel = (ds) => !ds ? "" : ds.st === "ready" ? "🗣 吹き替えあり" : ds.st === "working" ? `🗣 吹き替えを作っています ${ds.msg || ""}`
+const dubLabel = (ds) => !ds ? "" : ds.st === "ready" ? "🗣 吹き替えあり" : ds.st === "partial" ? `🗣 途中まで吹き替えあり（${ds.msg || ""}）`
+  : ds.st === "working" ? `🗣 吹き替えを作っています ${ds.msg || ""}`
   : ds.st === "checking" ? "🗣 言語を確かめています" : ds.st === "error" ? "🗣 吹き替えに失敗" : "";
 
 function itemEl(video, i, isNow) {
@@ -117,6 +120,7 @@ function render() {
   // 吹き替え（英語の動画、web.py の Dubber）：できていれば重ねる。作っている間は進み具合を出す
   const ds = s.now ? (s.dub || {})[s.now.id] : null;
   $("chan").textContent = s.now ? (s.now.channel || "") + (ds && ds.st === "ready" ? "　🗣 吹き替え"
+    : ds && ds.st === "partial" ? `　🗣 吹き替え（途中まで、${ds.msg}）`
     : ds && ds.st === "working" ? `　🗣 吹き替えを作っています（${ds.msg}）` : ds && ds.st === "checking" ? "　🗣 言語を確かめています" : "") : "";
   document.title = s.now ? `▶ ${s.now.title} - autotube プレーヤー` : "autotube プレーヤー";  // F7（f7-switch）が窓のタイトルで見分ける
 
@@ -130,7 +134,7 @@ function render() {
     if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
     return;
   }
-  setDub(key, st === "ready" && ds && ds.st === "ready");
+  setDub(s.now.id, st === "ready" && ds ? ds.st : "");
   if (st === "ready") {
     veil.classList.add("hidden");
     if (v.dataset.key !== key) {
@@ -155,30 +159,95 @@ async function startPlay() {
     v.play().catch(() => {});
   }
 }
-$("unmute").onclick = () => { v.muted = false; $("unmute").hidden = true; v.play().catch(() => {}); };
+$("unmute").onclick = () => { v.muted = false; $("unmute").hidden = true; audio(); v.play().catch(() => {}); };
 v.addEventListener("volumechange", () => { if (!v.muted) $("unmute").hidden = true; });
 
 // 吹き替えの音：映像の位置に合わせて流す（止める・飛ばす・速さにもついていく）。元の音は DUB_ORIG 倍に下げる
-const dub = $("dub"), DUB_ORIG = 0.25;
-let dubKey = "", baseVol = 1;
-function applyVol() { v.volume = baseVol * (dubKey ? DUB_ORIG : 1); dub.volume = baseVol; dub.muted = v.muted; }
-function dubSync(force) {
-  if (!dubKey || !dub.src) return;
-  if (Math.abs(dub.currentTime - v.currentTime) > (force ? 0.05 : 0.35)) dub.currentTime = v.currentTime;
-  dub.playbackRate = v.playbackRate;
-  if (v.paused || v.ended) dub.pause(); else dub.play().catch(() => {});
+// 吹き替え：台本（/script/ID：時刻・配役・声・訳）だけを持ち、流しながら /tts（VOICEVOX）で声にして Web Audio で時刻どおりに鳴らす。
+// 先の LOOKAHEAD 秒を先回り。止める・飛ばす・速さにもついていく。途中までの台本（partial）は 15 秒ごとに読み直して続きを足す。
+// 元の音は DUB_ORIG 倍に下げる。日本語の字幕も出す
+const DUB_ORIG = 0.25, LOOKAHEAD = 8, VOICE = { M: 13, F: 3 };
+let dubKey = "", dubLines = [], dubPartial = false, dubFetchAt = 0, baseVol = 1, actx = null, gain = null;
+const dubCache = new Map(), dubSched = new Map();
+function applyVol() {
+  v.volume = baseVol * (dubKey && dubLines.length ? DUB_ORIG : 1);
+  if (gain) gain.gain.value = v.muted ? 0 : baseVol;
 }
-function setDub(key, ready) {
-  if (ready && dubKey !== key) {
-    dubKey = key; dub.src = `/dub/${encodeURIComponent(key)}`; dub.load(); applyVol();
-  } else if (!ready && dubKey) {
-    dub.pause(); dub.removeAttribute("src"); dub.load(); dubKey = ""; applyVol();
+function audio() {  // 音を鳴らす準備（ブラウザは操作のあとでないと鳴らさせないので、再生や「音を出す」のときに作る・再開する）
+  if (!actx) { actx = new AudioContext(); gain = actx.createGain(); gain.connect(actx.destination); applyVol(); }
+  if (actx.state === "suspended") actx.resume().catch(() => {});
+  return actx;
+}
+async function loadScript() {
+  const key = dubKey;
+  dubFetchAt = Date.now();
+  try {
+    const r = await fetch(`/script/${encodeURIComponent(key)}`);
+    if (r.ok && key === dubKey) { const d = await r.json(); dubLines = d.lines || []; applyVol(); }
+  } catch (e) {}
+}
+function dubStop() { for (const x of dubSched.values()) { try { x && x.stop(); } catch (e) {} } dubSched.clear(); }
+function setDub(key, st) {
+  const on = st === "ready" || st === "partial";
+  if (on && dubKey !== key) { dubStop(); dubCache.clear(); dubKey = key; dubLines = []; loadScript(); }
+  else if (!on && dubKey) { dubStop(); dubCache.clear(); dubKey = ""; dubLines = []; $("dsub").textContent = ""; }
+  if (on && dubPartial && st === "ready") loadScript();  // 途中から全部できた
+  dubPartial = st === "partial";
+  applyVol();
+}
+setInterval(() => { if (dubKey && dubPartial && Date.now() - dubFetchAt > 15000) loadScript(); }, 3000);
+const room = (i) => Math.max(0.8, (dubLines[i + 1] ? dubLines[i + 1].t : dubLines[i].end + 3) - dubLines[i].t);
+async function voice(text, sp, speed, pitch) {
+  const r = await fetch(`/tts?text=${encodeURIComponent(text)}&sp=${sp}&speed=${speed}&pitch=${pitch}`);
+  if (!r.ok) throw new Error(await r.text());
+  return audio().decodeAudioData(await r.arrayBuffer());
+}
+function synth(i) {
+  const L = dubLines[i], k = `${dubKey}:${L.t}`;
+  if (!dubCache.has(k)) {
+    dubCache.set(k, (async () => {
+      const vc = Array.isArray(L.voice) ? L.voice : [L.voice || VOICE[L.sp] || VOICE.M, 0];
+      let speed = 1.15, buf = await voice(L.ja, vc[0], speed, vc[1] || 0);
+      if (buf.duration > room(i)) {  // 次の文までに収まらなければ速く読み直す（2 倍まで）
+        speed = Math.min(2, speed * buf.duration / room(i) * 1.05);
+        buf = await voice(L.ja, vc[0], speed, vc[1] || 0);
+      }
+      return buf;
+    })());
+    dubCache.get(k).catch(() => dubCache.delete(k));
+  }
+  return dubCache.get(k);
+}
+function dubTick() {
+  if (!dubKey || !dubLines.length || v.paused || v.seeking || !actx) return;
+  const now = v.currentTime, key = dubKey;
+  for (let i = 0; i < dubLines.length; i++) {
+    const L = dubLines[i];
+    if (L.t > now + LOOKAHEAD) break;
+    const k = `${key}:${L.t}`;
+    if (L.t + room(i) < now || dubSched.has(k)) continue;
+    dubSched.set(k, null);
+    synth(i).then((buf) => {
+      if (key !== dubKey || !dubSched.has(k) || dubSched.get(k) || v.paused) return;
+      const off = v.currentTime - L.t;
+      if (off >= buf.duration) return;
+      const src = actx.createBufferSource();
+      src.buffer = buf; src.playbackRate.value = v.playbackRate; src.connect(gain);
+      if (off < 0) src.start(actx.currentTime - off / v.playbackRate); else src.start(0, off);
+      dubSched.set(k, src);
+    }).catch(() => { dubSched.delete(k); });
   }
 }
-dub.addEventListener("canplay", () => dubSync(true));
-for (const ev of ["play", "pause", "seeked", "ratechange"]) v.addEventListener(ev, () => dubSync(true));
-v.addEventListener("timeupdate", () => dubSync(false));
-v.addEventListener("volumechange", () => { dub.muted = v.muted; });
+setInterval(dubTick, 250);
+for (const ev of ["seeking", "pause", "ratechange", "emptied"]) v.addEventListener(ev, dubStop);
+for (const ev of ["seeked", "play", "ratechange"]) v.addEventListener(ev, () => { if (dubKey) audio(); setTimeout(dubTick, 0); });
+v.addEventListener("volumechange", applyVol);
+v.addEventListener("timeupdate", () => {  // 吹き替えの字幕（今の文）
+  if (!dubKey) return;
+  const now = v.currentTime;
+  const i = dubLines.findIndex((L, k) => L.t <= now && now < L.t + Math.min(room(k), Math.max(2.5, L.end - L.t + 1)));
+  $("dsub").textContent = i >= 0 ? dubLines[i].ja : "";
+});
 
 v.addEventListener("ended", () => post("next"));
 v.addEventListener("error", () => { if (v.dataset.key) $("veil").textContent = "再生できませんでした（⏭ 次へ）"; });

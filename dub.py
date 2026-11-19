@@ -140,17 +140,14 @@ def fetch_cues(video_id, max_sec=None, orig=None):
     return cues, lang
 
 
-def translate(cues, lang="en", progress=None):
-    """字幕の行を日本語の文にまとめて訳す（日本語の字幕なら訳さずに整える）。[{"i": 最初の行, "j": 最後の行, "sp": "M"|"F", "ja": 訳}]"""
-    out, cast = [], {}  # cast：これまでの登場人物 呼び名 -> M/F（分けて訳すので、呼び名がぶれないよう毎回渡す）
-    for k in range(0, len(cues), CHUNK):
-        part = cues[k:k + CHUNK]
-        lines = "\n".join(f"[{k + n}] ({c['t']:.1f}s) {c['text']}" for n, c in enumerate(part))
-        prev = out[-1]["ja"] if out else "(なし)"
-        known = "、".join(f"{w}（{g}）" for w, g in cast.items()) or "(まだなし)"
-        what = ("動画の日本語の字幕を、吹き替えの台本に整えてください（訳し直さない）" if lang == "ja"
-                else f"{lang_name(lang)}の動画の字幕を、日本語の吹き替えの台本にしてください")
-        obj = at.ask_claude(f"""{what}。
+def translate_chunk(cues, k, lang="en", prev="(なし)", cast=None):
+    """字幕の k 行目から CHUNK 行を日本語の文にまとめて訳す。[{"i", "j", "who", "sp", "ja"}]"""
+    part = cues[k:k + CHUNK]
+    lines = "\n".join(f"[{k + n}] ({c['t']:.1f}s) {c['text']}" for n, c in enumerate(part))
+    known = "、".join(f"{w}（{g}）" for w, g in (cast or {}).items()) or "(まだなし)"
+    what = ("動画の日本語の字幕を、吹き替えの台本に整えてください（訳し直さない）" if lang == "ja"
+            else f"{lang_name(lang)}の動画の字幕を、日本語の吹き替えの台本にしてください")
+    obj = at.ask_claude(f"""{what}。
 
 - 字幕の行は途中で切れているので、続いている行をまとめて、自然な日本語の文にする（1 文はだいたい 2〜4 行分）
 - ただし ">>" の前と後ろは別の人のセリフなので、">>" をまたいで 1 つの文にまとめない（">>" のある行から新しい文にする）
@@ -169,15 +166,86 @@ def translate(cues, lang="en", progress=None):
 
 次の JSON だけを出力してください（説明は不要）:
 {{"s": [{{"i": 最初の行の番号, "j": 最後の行の番号, "who": "話している人の呼び名", "sp": "M" または "F", "ja": "日本語"}}]}}""")
-        got = [x for x in (obj or {}).get("s") or [] if isinstance(x, dict) and speakable(x.get("ja"))]
+    got = [x for x in (obj or {}).get("s") or [] if isinstance(x, dict) and speakable(x.get("ja"))]
+    log(f"訳した: {k}〜{k + len(part) - 1} 行 → {len(got)} 文")
+    return got
+
+
+def translate(cues, lang="en", progress=None):
+    """字幕全部を順番に訳す（実験用。autotube は make_script で並べて訳す）"""
+    out, cast = [], {}
+    for k in range(0, len(cues), CHUNK):
+        got = translate_chunk(cues, k, lang, out[-1]["ja"] if out else "(なし)", cast)
         for x in got:
             if x.get("who"):
                 cast.setdefault(str(x["who"]), x.get("sp", "M"))
-        log(f"訳した: {k}〜{k + len(part) - 1} 行 → {len(got)} 文")
         out += got
         if progress:
             progress("translate", min(k + CHUNK, len(cues)), len(cues))
     return out
+
+
+PARALLEL = 3  # 同時に訳す数（claude -p を同時に動かす）
+
+
+def to_lines(cues, script):
+    """訳（行番号つき）を、時刻つきの台本の行 [{"t", "end", "who", "sp", "ja", "en"}] にする"""
+    out = []
+    for s in script:
+        try:
+            i, j = int(s["i"]), int(s.get("j", s["i"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if 0 <= i < len(cues):
+            j = min(max(i, j), len(cues) - 1)
+            out.append({"t": round(cues[i]["t"], 2), "end": round(cues[j]["t"] + cues[j]["d"], 2),
+                        "who": str(s.get("who") or ""), "sp": s.get("sp", "M"), "ja": s["ja"],
+                        "en": " ".join(c["text"] for c in cues[i:j + 1])})
+    out.sort(key=lambda x: x["t"])
+    return out
+
+
+def make_script(video_id, orig=None, progress=None, on_partial=None, meta=None):
+    """台本を作って保存し、場所を返す（作ったことがあればそれ）。訳すのは PARALLEL 個ずつ同時に、
+    頭から続けて訳し終わったところまでを途中の台本（partial: true, covered: 何秒まで）としてそのつど保存し on_partial() を呼ぶ
+    （プレーヤーは途中から流し始められる）。字幕が無ければ RuntimeError"""
+    from concurrent.futures import ThreadPoolExecutor
+    f = script_path(video_id)
+    if f.exists() and not json.loads(f.read_text()).get("partial"):
+        return f
+    cues, lang = fetch_cues(video_id, orig=orig)
+    log(f"{video_id}: 字幕 {len(cues)} 行（{lang}）")
+    starts = list(range(0, len(cues), CHUNK))
+    done, saved = {}, 0
+    with ThreadPoolExecutor(PARALLEL) as ex:
+        futs = {k: ex.submit(translate_chunk, cues, k, lang) for k in starts}
+        for k in starts:  # 頭から順に待つ（後ろが先に終わっても、続いたところまでしか途中の台本にしない）
+            try:
+                done[k] = futs[k].result()
+            except Exception as e:
+                log(f"訳せなかった {k}: {e!r}")
+                done[k] = []
+            prefix = [x for kk in starts if kk in done for x in done[kk]] if all(kk in done for kk in starts[:starts.index(k) + 1]) else None
+            if progress:
+                progress("translate", min(k + CHUNK, len(cues)), len(cues))
+            if prefix is not None and k != starts[-1]:
+                lines = to_lines(cues, prefix)
+                v = cast_voices(lines)
+                for x in lines:
+                    x["voice"] = v.get(x["who"] or x["sp"])
+                covered = cues[min(k + CHUNK, len(cues)) - 1]["t"]
+                save_script(video_id, {"id": video_id, "lang": lang, "partial": True, "covered": covered, "cast": v,
+                                       "lines": lines}, "", meta)
+                saved += 1
+                if on_partial:
+                    on_partial()
+    lines = to_lines(cues, [x for k in starts for x in done[k]])
+    if not lines:
+        raise RuntimeError("台本を作れませんでした")
+    v = cast_voices(lines)
+    for x in lines:
+        x["voice"] = v.get(x["who"] or x["sp"])
+    return save_script(video_id, {"id": video_id, "lang": lang, "partial": False, "cast": v, "lines": lines}, "", meta)
 
 
 def speakable(ja):

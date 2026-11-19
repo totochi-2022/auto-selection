@@ -278,7 +278,9 @@ class Media:
 
 class Dubber:
     """英語の動画の吹き替えを裏で 1 本ずつ作っておく係（リモコンの「英語も（吹き替え）」のとき）。
-    状態は key -> checking（言語を確かめ中）/ working（作っている、progress に段階と数）/ ready / none（日本語・字幕なし）/ error"""
+    台本（時刻・配役・声・訳、dub.make_script）だけを作り、声はプレーヤーが流しながら作る（/tts）。
+    状態は key -> checking（言語を確かめ中）/ working（訳している、progress に数）/ partial（頭から途中まで訳せた、流し始められる）
+    / ready / none（日本語・字幕なし）/ error"""
 
     def __init__(self, on_change):
         self.on_change = on_change
@@ -294,19 +296,14 @@ class Dubber:
         with self.cv:
             if vid in self.state:
                 return
-            if dubmod.dub_path(vid).exists():
+            f = dubmod.find_script(vid, prefer=("",))
+            if f and not json.loads(f.read_text()).get("partial"):
                 self.state[vid] = "ready"
             else:
                 self.state[vid] = "checking"
                 self.todo.append(vid)
                 self.cv.notify()
         self.on_change()
-
-    def path(self, key):
-        if not re.fullmatch(r"[\w-]+", key):
-            return None
-        f = dubmod.dub_path(key)
-        return f if f.exists() else None
 
     def _set(self, vid, st, force=True):
         with self.cv:
@@ -329,10 +326,11 @@ class Dubber:
                 log(f"吹き替えを作ります: {vid}（{lang}）")
 
                 def prog(stage, k, n, vid=vid):
-                    self.progress[vid] = f"{'訳しています' if stage == 'translate' else '声にしています'} {k}/{n}"
-                    self._set(vid, "working", force=False)
+                    self.progress[vid] = f"訳しています {k}/{n}"
+                    self._set(vid, self.state.get(vid) if self.state.get(vid) == "partial" else "working", force=False)
                 self._set(vid, "working")
-                dubmod.dub_video(vid, prog, orig=lang)  # 元の言語（ar・he など）の字幕も探す
+                # 元の言語（ar・he など）の字幕も探す。頭から訳せたところまでで partial にする（流し始められる）
+                dubmod.make_script(vid, orig=lang, progress=prog, on_partial=lambda vid=vid: self._set(vid, "partial"))
                 self._set(vid, "ready")
                 log(f"吹き替えができた: {vid}")
             except RuntimeError as e:  # 字幕が無いなど
@@ -467,7 +465,7 @@ class App:
             k = v.get("id") or ""
             st = self.dub.state.get(k)
             if st:
-                out[k] = {"st": st, "msg": self.dub.progress.get(k, "") if st == "working" else ""}
+                out[k] = {"st": st, "msg": self.dub.progress.get(k, "") if st in ("working", "partial") else ""}
         return out
 
     def _dub_ahead(self):
@@ -1436,8 +1434,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (WEB_DIR / "player.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/media/"):
             self._media(path.removeprefix("/media/"))
-        elif path.startswith("/dub/"):  # 吹き替えの音（WAV）
-            self._media(path.removeprefix("/dub/"), app.dub.path)
         # ---- 吹き替えの実験（台本だけを持ち、流しながら声にする）：/dubtest?id=動画 ----
         elif path == "/dubtest":
             self._send(200, (WEB_DIR / "dubtest.html").read_bytes(), "text/html; charset=utf-8")
