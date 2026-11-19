@@ -508,7 +508,8 @@ def choose(request, candidates, history, n=1, newest=False, channel=None, kind="
 # 候補（番号. タイトル ／ チャンネル ／ 長さ ／ 再生数）
 {chr(10).join(lines)}
 
-次の JSON だけを1行で出力してください（説明文やコードブロックは不要）。picks は観る順に{n}個:
+次の JSON だけを1行で出力してください（説明文やコードブロックは不要）。picks は観る順に最大{n}個。
+希望に合う候補が{n}本に足りなければ、合うものだけを選んで少なくしてよい（合わないものを無理に入れない。1 本も合わなければ空でよい）:
 {{"picks": [{{"index": 候補の番号, "reason": "選んだ理由を日本語で短く"}}]}}""")
     picks, used = [], set()
     for p in (obj or {}).get("picks") or []:
@@ -519,7 +520,7 @@ def choose(request, candidates, history, n=1, newest=False, channel=None, kind="
         if 0 <= i < len(candidates) and i not in used:
             used.add(i)
             picks.append((candidates[i], str(p.get("reason", ""))))
-    if not picks:
+    if not picks and obj is None:  # Claude の返事が読めなかったときだけ先頭の候補で埋める（合わないから選ばなかったときは埋めない）
         log("選べなかったので先頭の候補にします")
         picks = [(c, "(自動で選択)") for c in candidates[:n]]
     return picks[:n]

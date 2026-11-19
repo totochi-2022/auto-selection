@@ -510,7 +510,12 @@ class App:
                                            "channel": c.get("channel"), "channel_id": c.get("channel_id"),
                                            "duration": c.get("duration"), "reason": reason})
                 play_now = self.play_on_fill and self.queue
-                self.status = f"次の {len(self.queue)} 本を用意しました"
+                if self.queue:
+                    self.status = f"次の {len(self.queue)} 本を用意しました"
+                elif japanese:
+                    self.status = "希望に合う日本語の動画が見つかりませんでした（英語の動画は外しています）。希望を変えてみてください"
+                else:
+                    self.status = "希望に合う動画が見つかりませんでした。希望を変えてみてください"
         except Exception as e:  # 選定の失敗でサーバーを落とさない
             log(f"選定に失敗: {e!r}")
             self.set_status(f"選定に失敗しました: {e}")
