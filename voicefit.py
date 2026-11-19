@@ -25,6 +25,7 @@ D = Path.home() / ".cache/autotube/dub"
 MODEL = Path.home() / ".local/share/dub-models/wespeaker_en_voxceleb_CAM++.onnx"
 VOICEVOX = "http://127.0.0.1:50021"
 SR = 16000
+MAX_VOICES = 5  # 1 本の動画で使う声の種類の上限（メモリ）
 # 候補の声（番号: 名前）。高さ・年代がばらけるように
 MALE = {13: "青山龍星", 11: "玄野武宏", 12: "白上虎太郎", 21: "剣崎雌雄", 52: "雀松朱司", 53: "麒ヶ島宗麟",
         42: "ちび式じい", 51: "†聖騎士 紅桜†", 99: "離途", 100: "黒沢冴白"}
@@ -68,6 +69,17 @@ def voicevox_sample(sp):
     return np.interp(np.arange(0, len(x), sr / SR), np.arange(len(x)), x).astype("float32")  # 16kHz に
 
 
+def restart_voicevox():
+    import time
+    subprocess.run(["systemctl", "--user", "restart", "voicevox"])
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(f"{VOICEVOX}/version", timeout=2).read()
+            return
+        except OSError:
+            time.sleep(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video_id")
@@ -95,29 +107,70 @@ def main():
         chars[w] = {"f0": f0_median(x), "emb": embed(ex, x), "sec": len(x) / SR, "sex": sexes[w]}
         print(f"{w}: {chars[w]['sec']:.0f} 秒 高さ {chars[w]['f0'] or 0:.0f}Hz", file=sys.stderr)
 
-    # VOICEVOX の声を測る
-    refs = {}
+    # VOICEVOX の声を測る（一度測ったら REFS に保存して使い回す）。VOICEVOX は使った声を読み込んだままにするので、
+    # 20 種類を続けて使うとメモリが 4GB を超えて止められる → 7 種類ごとに VOICEVOX を起動し直してメモリを空ける
+    REFS = Path.home() / ".local/share/dub-models/voicevox-refs.json"
+    saved = json.loads(REFS.read_text()) if REFS.exists() else {}
+    refs, fresh = {}, 0
     for sp, name in {**MALE, **FEMALE}.items():
-        x = voicevox_sample(sp)
-        refs[sp] = {"name": name, "f0": f0_median(x), "emb": embed(ex, x), "sex": "F" if sp in FEMALE else "M"}
+        if str(sp) not in saved:
+            if fresh and fresh % 7 == 0:
+                restart_voicevox()
+            x = voicevox_sample(sp)
+            saved[str(sp)] = {"f0": f0_median(x), "emb": embed(ex, x).tolist()}
+            REFS.write_text(json.dumps(saved))
+            fresh += 1
+        r = saved[str(sp)]
+        refs[sp] = {"name": name, "f0": r["f0"], "emb": np.array(r["emb"]), "sex": "F" if sp in FEMALE else "M"}
+    if fresh:
+        restart_voicevox()  # 読み込んだ声を手放す
     print("VOICEVOX: " + "、".join(f"{r['name']} {r['f0'] or 0:.0f}Hz" for r in refs.values()), file=sys.stderr)
 
-    # セリフの多い人から、重ならないように近い声を選ぶ（高さの差（半音）＋声の特徴の違い）
+    # 高さは「順番合わせ」：声優・VOICEVOX は男はより低く女はより高く作ってあるので、Hz をそのまま比べず、
+    # 男女それぞれで、登場人物の高さの幅を VOICEVOX の声の高さの幅に縮めて当てはめる（高い人は高い声、低い人は低い声）
+    def target(c):
+        cs = [x["f0"] for x in chars.values() if x["sex"] == c["sex"] and x["f0"]]
+        rs = [r["f0"] for r in refs.values() if r["sex"] == c["sex"] and r["f0"]]
+        if not c["f0"] or len(cs) < 2 or max(cs) - min(cs) < 1:
+            return float(np.exp(np.mean(np.log(rs))))  # 1 人だけなら真ん中の高さ
+        k = (np.log(c["f0"]) - np.log(min(cs))) / (np.log(max(cs)) - np.log(min(cs)))
+        return float(np.exp(np.log(min(rs)) + k * (np.log(max(rs)) - np.log(min(rs)))))
+
+    # セリフの多い人から、重ならないように近い声を選ぶ（当てはめた高さとの差（半音）＋声の特徴の違い）
     used, cast = set(), {}
     for w in sorted(chars, key=lambda w: -chars[w]["sec"]):
         c = chars[w]
+        tgt = target(c)
         best = None
         for sp, r in refs.items():
             if r["sex"] != c["sex"] or sp in used:
                 continue
-            semis = abs(12 * np.log2(c["f0"] / r["f0"])) if c["f0"] and r["f0"] else 6
-            score = semis + 8 * (1 - float(c["emb"] @ r["emb"]))
+            semis = abs(12 * np.log2(tgt / r["f0"])) if r["f0"] else 6
+            score = semis + 4 * (1 - float(c["emb"] @ r["emb"]))
             if best is None or score < best[0]:
                 best = (score, sp, semis)
         if best:
             used.add(best[1])
             cast[w] = [best[1], 0.0]
-            print(f"{w}（{c['f0'] or 0:.0f}Hz）→ {refs[best[1]]['name']}（{refs[best[1]]['f0'] or 0:.0f}Hz、差 {best[2]:.1f} 半音）")
+            print(f"{w}（{c['f0'] or 0:.0f}Hz → 当てはめ {tgt:.0f}Hz）→ {refs[best[1]]['name']}（{refs[best[1]]['f0'] or 0:.0f}Hz）")
+    # 使う声の種類は MAX_VOICES まで（VOICEVOX は声 1 種類で 200MB ほど使う）。セリフの多い人から順に声の種類を決め、
+    # それ以降の人は、すでに使っている同じ性別の声のうち当てはめた高さに近いものを、高さを変えて使う
+    order = sorted(cast, key=lambda w: -chars[w]["sec"])
+    nf = sum(1 for w in cast if chars[w]["sex"] == "F")
+    nm = len(cast) - nf
+    quota = {"F": min(nf, max(1, MAX_VOICES - nm)) if nf else 0}  # 女性がいれば女性の声を最低 1 種類
+    quota["M"] = MAX_VOICES - quota["F"]
+    kinds = []
+    for w in order:
+        sp, c = cast[w][0], chars[w]
+        if sp in kinds or sum(1 for k in kinds if refs[k]["sex"] == c["sex"]) < quota[c["sex"]]:
+            kinds.append(sp) if sp not in kinds else None
+            continue
+        same = [k for k in kinds if refs[k]["sex"] == c["sex"]] or kinds
+        k = min(same, key=lambda k: abs(np.log(target(c) / refs[k]["f0"])) if refs[k]["f0"] else 9)
+        n_same = sum(1 for x in order[:order.index(w)] if cast[x][0] == k)
+        cast[w] = [k, [0.06, -0.06, 0.12, -0.12][n_same % 4] if n_same else 0.06]
+        print(f"  声の種類が {MAX_VOICES} を超えるので {w} → {refs[k]['name']}（高さ {cast[w][1]:+.2f}）")
     for L in lines:
         if L["who"] in cast:
             L["voice"] = cast[L["who"]]
