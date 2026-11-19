@@ -335,6 +335,7 @@ function render(s) {
 
   // 吹き替え（英語の動画）の状態：できていれば 🗣、作っていれば進み具合
   const dubBadge = (ds) => !ds ? "" : ds.st === "ready" ? ' ／ <span class="dubok">🗣 吹き替えあり</span>'
+    : ds.st === "partial" ? ` ／ <span class="dubok">🗣 途中まで吹き替えあり</span>（${esc(ds.msg || "")}）`
     : ds.st === "working" ? ` ／ 🗣 作っています ${esc(ds.msg || "")}` : ds.st === "checking" ? " ／ 🗣 言語を確認中" : "";
   $("queue").innerHTML = s.queue.map((v, i) => `
     <li>
