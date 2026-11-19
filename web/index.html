@@ -362,7 +362,9 @@ async function loadHist() {
       if (!b) return;
       const v = h[Number(b.dataset.hist)];
       api("add", { url: v.url, title: v.title, play: !!b.dataset.play });
+      const label = b.dataset.play ? "▶" : "＋";  // 押したしるしは少しだけ。何度でも押せる
       b.textContent = "✓";
+      setTimeout(() => { b.textContent = label; }, 1200);
     };
   } catch (e) { $("hist").innerHTML = '<div class="empty">読めませんでした</div>'; }
 }
