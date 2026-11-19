@@ -83,6 +83,8 @@ const fmt = (s) => {
 };
 const thumb = (video) => /^[\w-]{11}$/.test(video.id || "") && !video.url ? `https://i.ytimg.com/vi/${video.id}/mqdefault.jpg` : "";
 const MEDIA_LABEL = { ready: "✓ 準備できた", loading: "⬇ 落としています…", error: "✗ 落とせなかった", "": "" };
+const dubLabel = (ds) => !ds ? "" : ds.st === "ready" ? "🗣 吹き替えあり" : ds.st === "working" ? `🗣 吹き替えを作っています ${ds.msg || ""}`
+  : ds.st === "checking" ? "🗣 言語を確かめています" : ds.st === "error" ? "🗣 吹き替えに失敗" : "";
 
 function itemEl(video, i, isNow) {
   const b = document.createElement("button");
@@ -96,7 +98,8 @@ function itemEl(video, i, isNow) {
   if (!video.duration) b.querySelector(".dur").remove();
   b.querySelector(".t").textContent = (isNow ? "▶ " : "") + video.title;
   b.querySelector(".c").textContent = video.channel || "";
-  b.querySelector(".s").textContent = MEDIA_LABEL[st] || "";
+  const ds = (state.dub || {})[video.id];  // 吹き替え（英語の動画）の状態も並べる
+  b.querySelector(".s").textContent = [MEDIA_LABEL[st] || "", dubLabel(ds)].filter(Boolean).join("　");
   b.title = video.reason || "";
   if (!isNow) b.onclick = () => post("play", { index: i });
   return b;

@@ -127,6 +127,7 @@
     .controls button { font-size: 16px; padding: 6px 2px; min-height: 38px; }
     li { grid-template-columns: 88px 1fr auto; }
   }
+  .dubok { color: #5aa0ff; font-weight: bold; }
 </style>
 </head>
 <body>
@@ -332,12 +333,15 @@ function render(s) {
       + "検索ワード: " + s.queries.join(" / ") + (s.claude_live && !s.opts.live ? "（Claude の判断でライブも含む）" : "")
     : "";
 
+  // 吹き替え（英語の動画）の状態：できていれば 🗣、作っていれば進み具合
+  const dubBadge = (ds) => !ds ? "" : ds.st === "ready" ? ' ／ <span class="dubok">🗣 吹き替えあり</span>'
+    : ds.st === "working" ? ` ／ 🗣 作っています ${esc(ds.msg || "")}` : ds.st === "checking" ? " ／ 🗣 言語を確認中" : "";
   $("queue").innerHTML = s.queue.map((v, i) => `
     <li>
       <img src="${thumb(v.id)}" alt="" loading="lazy">
       <div>
         <div class="title">${esc(v.title)}</div>
-        <div class="meta">${esc(v.channel || "")} ／ ${dur(v.duration)}</div>
+        <div class="meta">${esc(v.channel || "")} ／ ${dur(v.duration)}${dubBadge((s.dub || {})[v.id])}</div>
         ${v.reason ? `<div class="reason">${esc(v.reason)}</div>` : ""}
       </div>
       <div class="acts">
