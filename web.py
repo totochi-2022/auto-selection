@@ -762,11 +762,20 @@ class App:
             request = self.request
         self._played(video, request)
         self.open_bookmark(video["url"], "exact", solo=True)  # 同じ URL のタブがもうあればそこへ
-        threading.Timer(4.0, self.fullscreen).start()
+        threading.Timer(4.0, self._browser_full).start()
         if self.web:
             self._prefetch()
         self.changed()
         self.refill()
+
+    def _browser_full(self):
+        """Brave で開いたあと：全画面（本物の F9 キー＝人の操作の扱いになる）にしてから、ミュートを外す
+        （拡張機能が開いたタブは人の操作が無いので、動画はミュートで自動再生が始まる）"""
+        self.fullscreen()
+        time.sleep(1.5)
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if tvfs.exists():
+            subprocess.run([str(tvfs), "video", "unmute"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # ---- リスト（キュー）の操作：自動で足す・並べ替え・URL から足す・履歴 ----
     def set_auto(self, on):
