@@ -381,6 +381,19 @@ function applyCtl(c) {
   sendPos();
 }
 
+// 全画面のままほかのタブへ移ると、ブラウザが全画面を解く。戻ってきたら全画面に戻す（ページからは全画面にできないので、
+// web.py に本物の F9 キーを送ってもらう）。自分で F9・Esc で解いたときは戻さない
+let wantFs = false;
+document.addEventListener("fullscreenchange", () => {
+  if (document.fullscreenElement) { wantFs = true; return; }
+  setTimeout(() => { if (!document.hidden) wantFs = false; }, 400);  // 400ms 後も見えている＝自分で解いた
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && wantFs && !document.fullscreenElement) setTimeout(() => {
+    if (!document.hidden && !document.fullscreenElement) post("fullscreen");
+  }, 600);
+});
+
 function connect() {
   const es = new EventSource("/events");
   // つながるたびにブラウザで再生するモードにする（web.py を起動し直したあとも、このページが開いていればこのモードに戻る）
