@@ -797,7 +797,7 @@ class App:
         """埋め込んだあと：プレーヤーのタブを前に出し、読み込まれたころに再生を押す（中のプレーヤーは自動では始まらないことが多い）"""
         self.show_video()
         tvfs = Path.home() / ".local/bin/tvfs"
-        for wait in (6, 6):
+        for wait in (5, 4, 4, 4, 4):  # 中のプレーヤーの読み込みが遅いことがあるので何度か（再生中なら start は何もしない）
             time.sleep(wait)
             with self.lock:
                 if self.now is not video:
