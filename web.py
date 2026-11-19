@@ -279,7 +279,7 @@ class App:
         self.gen = 0               # 希望を変えるたびに増やす（古い選定結果を捨てる）
         self.request = ""
         self.opts = {"live": False, "long": False, "newest": False, "mode": "normal", "subs": False,
-                     "music": False, "ytm": False}
+                     "music": False, "ytm": False, "en": False}
         self.traits = ""           # 「似たもの」「ネットの記事から」で選ぶときの基準
         self.exclude_channel = ""  # 「似たもの」のお手本（候補から外す）
         self.foreign = False       # 外国語の動画を観たい希望か（false なら日本語の動画だけを選ぶ）
@@ -361,7 +361,7 @@ class App:
         with self.lock:
             self.gen += 1
             self.request = request
-            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest", "subs", "music", "ytm")}
+            self.opts = {k: bool(opts.get(k)) for k in ("live", "long", "newest", "subs", "music", "ytm", "en")}
             if self.opts["ytm"]:
                 self.opts["music"] = True  # YouTube Music で選ぶなら音楽だけ
             self.opts["mode"] = opts.get("mode") if opts.get("mode") in ("normal", "similar", "web") else "normal"
@@ -470,7 +470,8 @@ class App:
             kw = dict(newest=opts["newest"], channel=channel and channel["name"], kind=kind, traits=traits,
                       radio=radio and radio["title"])
             # 日本語の動画だけにする（外国語の希望・音楽・チャンネル指定のときはしない）。選んだ後に言語を確かめる
-            japanese = not foreign and kind != "music" and not channel
+            # en＝リモコンの「英語も（吹き替え）」：英語の動画も選ぶ（吹き替えはこれから）
+            japanese = not foreign and not opts.get("en") and kind != "music" and not channel
             if opts["subs"]:
                 stopper = [lambda: None]
 

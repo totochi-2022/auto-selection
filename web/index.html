@@ -184,6 +184,7 @@
             <option value="web">ネットの記事から（遅い）</option>
           </select></label>
         <label title="候補 20 本の字幕を読ませて、中身のしっかりした動画を選ぶ"><input type="checkbox" id="optSubs"> 字幕を読んで選ぶ（遅い）</label>
+        <label title="ふだんは日本語の動画だけ。オンにすると英語の動画も選ぶ（ずんだもんたちの吹き替えはこれから）"><input type="checkbox" id="optEn"> 🌐 英語も（吹き替え）</label>
         <label title="曲そのものが聴ける動画だけを選ぶ（解説・リアクションは外す）。作業用 BGM・メドレーも可"><input type="checkbox" id="optMusic"> 🎵 音楽だけ</label>
         <label title="YouTube Music で曲を探し、その曲のラジオ（似た曲）から選ぶ。音楽だけになる"><input type="checkbox" id="optYtm"> YouTube Music で選ぶ</label>
       </div>
@@ -319,6 +320,7 @@ function render(s) {
     $("optNewest").checked = s.opts.newest;
     $("optMode").value = s.opts.mode || "normal";
     $("optSubs").checked = !!s.opts.subs;
+    $("optEn").checked = !!s.opts.en;
     $("optMusic").checked = !!s.opts.music;
     $("optYtm").checked = !!s.opts.ytm;
   }
@@ -385,7 +387,7 @@ $("optQ720").addEventListener("change", (e) => api("q720", { on: e.target.checke
 $("optYtm").addEventListener("change", (e) => { if (e.target.checked) $("optMusic").checked = true; });
 $("optMusic").addEventListener("change", (e) => { if (!e.target.checked) $("optYtm").checked = false; });
 
-for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs", "optMusic", "optYtm"]) {
+for (const id of ["request", "optLive", "optLong", "optNewest", "optMode", "optSubs", "optEn", "optMusic", "optYtm"]) {
   $(id).addEventListener("input", () => { formTouched = true; });
   $(id).addEventListener("change", () => { formTouched = true; });
 }
@@ -396,7 +398,7 @@ $("form").addEventListener("submit", (e) => {
   if (!request) return $("request").focus();
   formTouched = false;
   api("start", { request, opts: { live: $("optLive").checked, long: $("optLong").checked, newest: $("optNewest").checked,
-                          mode: $("optMode").value, subs: $("optSubs").checked,
+                          mode: $("optMode").value, subs: $("optSubs").checked, en: $("optEn").checked,
                           music: $("optMusic").checked, ytm: $("optYtm").checked } });
 });
 $("request").addEventListener("keydown", (e) => {
