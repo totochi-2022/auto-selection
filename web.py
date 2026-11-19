@@ -10,6 +10,7 @@ mpv は 1 つを常駐させ、JSON IPC（--input-ipc-server）で動画の切�
 mpv が応答しなくなったら（見張り役が数秒ごとに確認）、強制終了して同じ動画を同じ位置から再開する。
 """
 import hashlib
+import html
 import json
 import mimetypes
 import re
@@ -1664,6 +1665,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"text": app.pc_clip()}, ensure_ascii=False))
         elif path == "/api/curtab":  # テレビの Brave の手前のタブ（今のタブをリストに足す）
             self._send(200, json.dumps(app.cur_tab(), ensure_ascii=False))
+        elif path == "/embedtest":  # 実験：ほかのサイトのページをこのページの中に埋め込めるか（?u=URL）
+            u = parse_qs(urlparse(self.path).query).get("u", [""])[0]
+            page = ('<!doctype html><meta charset="utf-8"><title>埋め込みの実験</title>'
+                    '<style>html,body{margin:0;height:100%;background:#000}iframe{border:0;width:100%;height:100%}</style>'
+                    f'<iframe src="{html.escape(u)}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>')
+            self._send(200, page, "text/html; charset=utf-8")
         elif path == "/api/history":
             self._send(200, json.dumps(app.history(), ensure_ascii=False))
         elif path == "/api/openhosts":
