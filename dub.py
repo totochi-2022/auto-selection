@@ -217,8 +217,24 @@ def make_script(video_id, orig=None, progress=None, on_partial=None, meta=None):
     log(f"{video_id}: 字幕 {len(cues)} 行（{lang}）")
     starts = list(range(0, len(cues), CHUNK))
     done, saved = {}, 0
+    # 訳したまとまりは保存しておき、途中で止まって（web.py を起動し直すなど）また作るときは続きから
+    cdir = OUT / "chunks" / video_id
+    cdir.mkdir(parents=True, exist_ok=True)
+
+    def chunk(k):
+        cf = cdir / f"{k}.json"
+        if cf.exists():
+            try:
+                return json.loads(cf.read_text())
+            except ValueError:
+                pass
+        got = translate_chunk(cues, k, lang)
+        if got:
+            cf.write_text(json.dumps(got, ensure_ascii=False))
+        return got
+
     with ThreadPoolExecutor(PARALLEL) as ex:
-        futs = {k: ex.submit(translate_chunk, cues, k, lang) for k in starts}
+        futs = {k: ex.submit(chunk, k) for k in starts}
         for k in starts:  # 頭から順に待つ（後ろが先に終わっても、続いたところまでしか途中の台本にしない）
             try:
                 done[k] = futs[k].result()
@@ -245,7 +261,10 @@ def make_script(video_id, orig=None, progress=None, on_partial=None, meta=None):
     v = cast_voices(lines)
     for x in lines:
         x["voice"] = v.get(x["who"] or x["sp"])
-    return save_script(video_id, {"id": video_id, "lang": lang, "partial": False, "cast": v, "lines": lines}, "", meta)
+    f = save_script(video_id, {"id": video_id, "lang": lang, "partial": False, "cast": v, "lines": lines}, "", meta)
+    import shutil
+    shutil.rmtree(cdir, ignore_errors=True)  # できあがったら、まとまりの控えは要らない
+    return f
 
 
 def speakable(ja):
