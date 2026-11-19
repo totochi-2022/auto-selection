@@ -88,7 +88,7 @@ const fmt = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 };
-const thumb = (video) => /^[\w-]{11}$/.test(video.id || "") && !video.url ? `https://i.ytimg.com/vi/${video.id}/mqdefault.jpg` : "";
+const thumb = (video) => video.thumb || (/^[\w-]{11}$/.test(video.id || "") ? `https://i.ytimg.com/vi/${video.id}/mqdefault.jpg` : "");
 const MEDIA_LABEL = { ready: "✓ 準備できた", loading: "⬇ 落としています…", error: "✗ 落とせなかった", "": "" };
 const dubLabel = (ds) => !ds ? "" : ds.st === "ready" ? "🗣 吹き替えあり" : ds.st === "partial" ? `🗣 途中まで吹き替えあり（${ds.msg || ""}）`
   : ds.st === "working" ? `🗣 吹き替えを作っています ${ds.msg || ""}`

@@ -704,7 +704,8 @@ class App:
                            "request": request, "reason": video.get("reason"),
                            **({"url": video["url"]} if video.get("url") else {}),
                            **({"browser": True} if video.get("browser") else {}),
-                           **({"duration": video["duration"]} if video.get("duration") else {})})
+                           **({"duration": video["duration"]} if video.get("duration") else {}),
+                           **({"thumb": video["thumb"]} if video.get("thumb") else {})})
 
     def play(self, video):
         # ブラウザで再生するモードでは、YouTube のライブ（長さ 0）は落とせないので Brave の YouTube のページで
@@ -804,14 +805,15 @@ class App:
                     "channel": info.get("channel")}
         info = self._probe(url, False)
         if info and (info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming")):
-            info = {"title": info.get("title")} | {"_live": True}  # 生放送（ABEMA のチャンネルなど）は落とせないので Brave で開く
+            info = {"title": info.get("title"), "thumbnail": info.get("thumbnail")} | {"_live": True}  # 生放送（ABEMA のチャンネルなど）は落とせないので Brave で開く
         if info and not info.get("_live"):
             return {"id": f"cast:{info.get('extractor_key', '')}:{info.get('id', '')}", "url": url,
                     "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
-                    "channel": info.get("uploader") or info.get("extractor_key")}
+                    "channel": info.get("uploader") or info.get("extractor_key"), "thumb": info.get("thumbnail")}
         host = urlparse(url).hostname or url
         return {"id": "web:" + hashlib.sha1(url.encode()).hexdigest()[:12], "url": url, "browser": True,
-                "title": title or (info or {}).get("title") or url, "duration": 0, "channel": host}
+                "title": title or (info or {}).get("title") or url, "duration": 0, "channel": host,
+                "thumb": (info or {}).get("thumbnail")}
 
     def add(self, url, where="end", title="", play=False):
         """リストに足す（URL を貼る・右クリック・共有・履歴から）。where: next（次に流す）/ end（最後に）。play なら今すぐ流す"""
@@ -885,7 +887,8 @@ class App:
             if not url:
                 continue
             out.append({"id": vid, "url": url, "title": r.get("title"), "channel": r.get("channel"), "ts": r.get("ts"),
-                        "request": r.get("request"), "browser": bool(r.get("browser")), "duration": r.get("duration") or 0})
+                        "request": r.get("request"), "browser": bool(r.get("browser")), "duration": r.get("duration") or 0,
+                        "thumb": r.get("thumb")})
             if len(out) >= n:
                 break
         return out

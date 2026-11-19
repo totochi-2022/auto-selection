@@ -268,8 +268,11 @@ const fmt = (sec) => {
   return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0");
 };
 const dur = (sec) => sec ? fmt(sec) : '<span class="live">● ライブ</span>';
-const thumb = (id) => String(id).startsWith("cast:") ? "data:image/gif;base64,R0lGODlhAQABAAAAACw="  // YouTube 以外の送られた動画
-  : `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg`;
+// サムネイル：YouTube は ID から。それ以外（cast:・web:）は調べたときの画像があればそれ、無ければ 🌐
+const isYt = (id) => /^[\w-]{11}$/.test(String(id));
+const thumb = (id) => isYt(id) ? `https://i.ytimg.com/vi/${encodeURIComponent(id)}/mqdefault.jpg` : "";
+const thumbHtml = (v, title = "") => v.thumb || isYt(v.id) ? `<img src="${esc(v.thumb || thumb(v.id))}" alt="" loading="lazy">`
+  : `<div class="webthumb"${title ? ` title="${title}"` : ""}>🌐</div>`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // テレビに送る：URL を貼って送る／PC 用のブックマークレット（ページの動画を一時停止して、再生位置ごと送る）
@@ -343,7 +346,7 @@ async function loadHist() {
     const h = await (await fetch("/api/history", { headers: { "X-Token": token } })).json();
     $("hist").innerHTML = h.map((v, i) => `
       <li>
-        ${v.browser ? '<div class="webthumb">🌐</div>' : `<img src="${thumb(v.id)}" alt="" loading="lazy">`}
+        ${thumbHtml(v)}
         <div><div class="title">${esc(v.title)}</div>
           <div class="meta">${esc(v.channel || "")}${v.duration ? " ／ " + dur(v.duration) : ""} ／ ${ago(v.ts)}</div>
           ${v.request ? `<div class="reason">希望：${esc(v.request)}</div>` : ""}</div>
@@ -393,7 +396,7 @@ function render(s) {
   const n = s.now;
   $("now").className = n ? "now" : "empty";
   $("now").innerHTML = n ? `
-    <img src="${thumb(n.id)}" alt="">
+    ${thumbHtml(n)}
     <div>
       <div class="title">${esc(n.title)}</div>
       <div class="meta">${esc(n.channel || "")} ／ ${dur(n.duration)}</div>
@@ -467,7 +470,7 @@ function render(s) {
   $("queue").innerHTML = s.queue.map((v, i) => `
     <li data-i="${i}">
       <div class="grip" title="押さえて上下に動かすと順番が変わる">≡</div>
-      ${v.browser ? '<div class="webthumb" title="テレビの Brave で開くもの">🌐</div>' : `<img src="${thumb(v.id)}" alt="" loading="lazy">`}
+      ${thumbHtml(v, "テレビの Brave で開くもの")}
       <div>
         <div class="title">${esc(v.title)}</div>
         <div class="meta">${esc(v.channel || "")} ／ ${dur(v.duration)}${dubBadge((s.dub || {})[v.id])}</div>
