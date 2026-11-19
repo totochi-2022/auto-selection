@@ -1550,6 +1550,14 @@ class App:
         self.mpv.command("seek", sec, "relative")
 
     def toggle_max(self):
+        if self.web:  # ブラウザのプレーヤー：プレーヤーを前に出して F9（動画を画面いっぱいに。埋め込みの中の動画も）
+            with self.lock:
+                now = self.now
+            if not (now and now.get("browser") and not now.get("embed")):
+                self.show_video()
+                time.sleep(0.5)
+            self.fullscreen()
+            return
         if not self.mpv.alive():
             return
         self.show_window()

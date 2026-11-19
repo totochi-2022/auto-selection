@@ -406,7 +406,8 @@ function render(s) {
     </div>` : (s.picking ? "選んでいます…" : "まだ何も再生していません");
 
   $("showBtn").hidden = !s.can_show;
-  $("maxBtn").hidden = !!s.can_show;  // tonzura では最大化のボタンを出さない（mpv は全画面で開く。Pi では出す）
+  // tonzura の mpv は全画面で開くので出さない。ブラウザのプレーヤーでは「動画を画面いっぱいに」（F9）として出す。Pi では出す
+  $("maxBtn").hidden = !!s.can_show && !s.web;
   const p = s.player;
   $("pos").textContent = fmt(p.pos);
   $("dur").textContent = p.dur ? fmt(p.dur) : (n && !n.duration ? "ライブ" : "0:00");
@@ -424,7 +425,7 @@ function render(s) {
   $("muteBtn").firstChild.textContent = p.muted ? "🔇" : "🔊";
   $("muteBtn").querySelector("small").textContent = p.muted ? "解除" : "ミュート";
   $("maxBtn").classList.toggle("on", p.maximized);
-  $("maxBtn").querySelector("small").textContent = p.maximized ? "元に戻す" : "最大化";
+  $("maxBtn").querySelector("small").textContent = s.web ? "全画面" : p.maximized ? "元に戻す" : "最大化";
   for (const b of document.querySelectorAll(".controls button")) b.disabled = !n || !p.running;
   $("optQ720").checked = s.q720;
   const ch = s.channel;
