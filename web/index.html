@@ -101,6 +101,16 @@
   li .acts { display: grid; gap: 6px; }
   li .acts button { padding: 6px 10px; min-height: 36px; font-size: 14px; }
   .live { color: var(--bad); font-weight: 600; }
+  /* リスト：左の ≡ を押さえて上下に動かすと順番が変わる */
+  #queue li { grid-template-columns: 22px 100px 1fr auto; }
+  #queue .grip { align-self: center; font-size: 20px; color: var(--muted); text-align: center; touch-action: none; cursor: grab; user-select: none; }
+  #queue li.dragging { opacity: .6; outline: 2px dashed var(--accent); border-radius: 8px; }
+  .webthumb { display: grid; place-items: center; aspect-ratio: 16/9; border-radius: 6px; background: var(--panel2); font-size: 28px; }
+  .addrow { display: flex; gap: 6px; margin: 0 0 10px; }
+  .addrow input { flex: 1; min-width: 0; }
+  .autorow { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 0 0 8px; }
+  #hist li { grid-template-columns: 100px 1fr auto; }
+  #histBox summary { cursor: pointer; font-weight: 600; }
   .chmode { font-size: 13px; color: var(--accent); margin: -4px 0 10px; }
 
   @media (max-width: 480px) {
@@ -199,17 +209,32 @@
 
   <section>
     <div class="qhead">
-      <h2>ネクスト</h2>
+      <h2>リスト</h2>
       <div>
+        <button data-act="clearq" title="リストを全部外す">全部外す</button>
         <button data-act="reshuffle" title="キューを捨てて選び直す">選び直す</button>
         <button data-act="stop" title="再生を止める">停止</button>
         <button data-act="quit" title="再生アプリ（mpv）を終了してメモリを空ける">終了</button>
       </div>
     </div>
+    <label class="autorow" title="オン：リストが減ったら希望に合わせて選んで足す（流し見）。オフ：リストにあるものだけ流して止まる（じっくり見る）">
+      <input type="checkbox" id="optAuto"> 自動で足す（流し見）</label>
+    <form class="addrow" id="addForm" autocomplete="off">
+      <input id="addUrl" type="url" placeholder="URL を貼ってリストに足す（アニメのページなども）">
+      <button type="submit" data-where="next" title="次に流す">次に</button>
+      <button type="submit" data-where="end" class="primary" title="リストの最後に">＋ 最後に</button>
+    </form>
     <div id="qbusy" class="qbusy"></div>
     <div id="chmode" class="chmode"></div>
     <ol id="queue"></ol>
     <div id="queueEmpty" class="empty">まだありません</div>
+  </section>
+
+  <section>
+    <details id="histBox">
+      <summary>🕘 履歴（流した動画）</summary>
+      <ol id="hist" style="margin-top:10px"></ol>
+    </details>
   </section>
 
   <section>
@@ -245,6 +270,70 @@ const thumb = (id) => String(id).startsWith("cast:") ? "data:image/gif;base64,R0
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // テレビに送る：URL を貼って送る／PC 用のブックマークレット（ページの動画を一時停止して、再生位置ごと送る）
+// リスト：自動で足す・URL から足す
+$("optAuto").addEventListener("change", () => api("auto", { on: $("optAuto").checked }));
+$("addForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const url = $("addUrl").value.trim();
+  if (!url) return $("addUrl").focus();
+  api("add", { url, where: (e.submitter && e.submitter.dataset.where) || "end" });
+  $("addUrl").value = "";
+});
+
+// リストの並べ替え：≡ を押さえて上下に。離したところへ動かす（タッチでも動くよう pointer で自前に）
+let dragging = null;
+$("queue").addEventListener("pointerdown", (e) => {
+  const g = e.target.closest(".grip");
+  if (!g) return;
+  e.preventDefault();
+  const li = g.closest("li");
+  dragging = { li, from: Number(li.dataset.i) };
+  li.classList.add("dragging");
+  g.setPointerCapture(e.pointerId);
+});
+$("queue").addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const items = [...$("queue").children].filter((x) => x !== dragging.li);
+  const after = items.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+  $("queue").insertBefore(dragging.li, after || null);
+});
+const dragEnd = () => {
+  if (!dragging) return;
+  const to = [...$("queue").children].indexOf(dragging.li);
+  dragging.li.classList.remove("dragging");
+  if (to !== dragging.from && to >= 0) api("move", { from: dragging.from, to });
+  dragging = null;
+};
+$("queue").addEventListener("pointerup", dragEnd);
+$("queue").addEventListener("pointercancel", dragEnd);
+
+// 履歴：開いたときに読む。▶ 今すぐ流す・＋ リストの最後に
+const ago = (ts) => { const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 60 ? `${m}分前` : m < 1440 ? `${Math.round(m / 60)}時間前` : `${Math.round(m / 1440)}日前`; };
+async function loadHist() {
+  try {
+    const h = await (await fetch("/api/history", { headers: { "X-Token": token } })).json();
+    $("hist").innerHTML = h.map((v, i) => `
+      <li>
+        ${v.browser ? '<div class="webthumb">🌐</div>' : `<img src="${thumb(v.id)}" alt="" loading="lazy">`}
+        <div><div class="title">${esc(v.title)}</div>
+          <div class="meta">${esc(v.channel || "")}${v.duration ? " ／ " + dur(v.duration) : ""} ／ ${ago(v.ts)}</div>
+          ${v.request ? `<div class="reason">希望：${esc(v.request)}</div>` : ""}</div>
+        <div class="acts">
+          <button data-hist="${i}" data-play="1" title="今すぐ流す">▶</button>
+          <button data-hist="${i}" title="リストの最後に足す">＋</button>
+        </div>
+      </li>`).join("") || '<div class="empty">まだありません</div>';
+    $("hist").onclick = (e) => {
+      const b = e.target.closest("[data-hist]");
+      if (!b) return;
+      const v = h[Number(b.dataset.hist)];
+      api("add", { url: v.url, title: v.title, play: !!b.dataset.play });
+      b.textContent = "✓";
+    };
+  } catch (e) { $("hist").innerHTML = '<div class="empty">読めませんでした</div>'; }
+}
+$("histBox").addEventListener("toggle", () => { if ($("histBox").open) loadHist(); });
+
 $("castForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("castUrl").value.trim();
@@ -344,9 +433,12 @@ function render(s) {
   const dubBadge = (ds) => !ds ? "" : ds.st === "ready" ? ' ／ <span class="dubok">🗣 吹き替えあり</span>'
     : ds.st === "partial" ? ` ／ <span class="dubok">🗣 途中まで吹き替えあり</span>（${esc(ds.msg || "")}）`
     : ds.st === "working" ? ` ／ 🗣 作っています ${esc(ds.msg || "")}` : ds.st === "checking" ? " ／ 🗣 言語を確認中" : "";
+  $("optAuto").checked = s.auto !== false;
+  if (dragging) return;  // 並べ替えの途中は描き直さない
   $("queue").innerHTML = s.queue.map((v, i) => `
-    <li>
-      <img src="${thumb(v.id)}" alt="" loading="lazy">
+    <li data-i="${i}">
+      <div class="grip" title="押さえて上下に動かすと順番が変わる">≡</div>
+      ${v.browser ? '<div class="webthumb" title="テレビの Brave で開くもの">🌐</div>' : `<img src="${thumb(v.id)}" alt="" loading="lazy">`}
       <div>
         <div class="title">${esc(v.title)}</div>
         <div class="meta">${esc(v.channel || "")} ／ ${dur(v.duration)}${dubBadge((s.dub || {})[v.id])}</div>

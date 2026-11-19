@@ -366,6 +366,7 @@ class App:
         self.channel = None        # {"id", "name"}：気に入ったチャンネルからだけ選ぶモード
         self.radio = None          # {"id", "title"}：その曲を起点にしたラジオ（似た曲）から選ぶモード
         self.picking = False
+        self.auto = True           # 自動で足す（流し見）。オフならキューにあるものだけ流して止まる（じっくり見る）
         self.play_on_fill = False  # キューが埋まったらすぐ再生する
         self.status = "希望を入力して「スタート」"
         self.player = {"pos": 0, "dur": 0, "paused": False, "maximized": True, "running": False,
@@ -389,14 +390,12 @@ class App:
     # ---- 起動し直しても希望・今の動画・キューを覚えておく（web.py を直して起動し直すたびに消えないように）----
     STATE_FILE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "autotube" / "web-state.json"
     SAVED = ("request", "opts", "queries", "claude_live", "kind", "filters", "traits", "channel", "radio",
-             "now", "queue", "web")
+             "now", "queue", "web", "auto")
 
     def _restore(self):
         try:
             d = json.loads(self.STATE_FILE.read_text())
-            # 保存は変わったときだけなので、一晩止めておくと 6 時間を超えて消えていた。3 日より前のものだけ使わない
-            if time.time() - d.get("t", 0) > 3 * 86400:
-                return
+            # 時間では捨てない（保存は変わったときだけなので、一晩止めておくと 6 時間の期限で消えていた）
         except (OSError, ValueError):
             return
         for k in self.SAVED:
@@ -449,7 +448,7 @@ class App:
             return {"request": self.request, "opts": self.opts, "q720": self.q720, "queries": self.queries,
                     "claude_live": self.claude_live, "kind": self.kind, "filters": at.describe_filters(self.filters), "traits": self.traits, "channel": self.channel, "radio": self.radio, "now": self.now, "queue": self.queue,
                     "picking": self.picking, "status": self.status, "player": self.player,
-                    "web": self.web, "media": self._media_snapshot(), "dub": self._dub_snapshot(), "ctl": self.ctl,
+                    "web": self.web, "auto": self.auto, "media": self._media_snapshot(), "dub": self._dub_snapshot(), "ctl": self.ctl,
                     "can_show": self.WIN_FOCUS.exists()}
 
     def _media_snapshot(self):
@@ -511,7 +510,7 @@ class App:
 
     def refill(self):
         with self.lock:
-            if self.picking or not self.request or len(self.queue) >= QUEUE_LEN:
+            if self.picking or not self.auto or not self.request or len(self.queue) >= QUEUE_LEN:
                 return
             self.picking = True
             gen = self.gen
@@ -699,7 +698,17 @@ class App:
         self.mpv.command("set_property", "ontop", True)  # いったん最前面にしてすぐ戻す
         threading.Timer(1.0, self.mpv.command, ("set_property", "ontop", False)).start()
 
+    def _played(self, video, request):
+        at.append_history({"event": "played", "ts": int(time.time()), "id": video["id"],
+                           "title": video["title"], "channel": video.get("channel"),
+                           "request": request, "reason": video.get("reason"),
+                           **({"url": video["url"]} if video.get("url") else {}),
+                           **({"browser": True} if video.get("browser") else {}),
+                           **({"duration": video["duration"]} if video.get("duration") else {})})
+
     def play(self, video):
+        if video.get("browser"):
+            return self._play_browser(video)
         if self.web:
             return self._play_web(video)
         self.set_status(f"「{video['title'][:40]}」を読み込んでいます…")
@@ -716,9 +725,7 @@ class App:
             self.status = f"「{video['title'][:40]}」を読み込んでいます…"
             self.progress_at, self.stalls = time.time(), 0
             request = self.request
-        at.append_history({"event": "played", "ts": int(time.time()), "id": video["id"],
-                           "title": video["title"], "channel": video.get("channel"),
-                           "request": request, "reason": video.get("reason")})
+        self._played(video, request)
         self.changed()
         self.refill()
 
@@ -730,20 +737,137 @@ class App:
             self.player.update(pos=0, dur=video.get("duration") or 0, running=True, paused=False)
             self.status = f"「{video['title'][:40]}」"
             request = self.request
-        at.append_history({"event": "played", "ts": int(time.time()), "id": video["id"],
-                           "title": video["title"], "channel": video.get("channel"),
-                           "request": request, "reason": video.get("reason")})
+        self._played(video, request)
         self.media.fetch(video)
         self._prefetch()
         self.changed()
         self.refill()
+
+    def _play_browser(self, video):
+        """mpv でもプレーヤーでも流せないサイト（アニメなど）：テレビの Brave の新しいタブで開いて全画面。
+        終わったら ⏭ 次へ（終わったことの知らせは拡張機能から、これから）"""
+        if self.web:
+            self.web_ctl("pause")
+        else:
+            self.mpv.command("set_property", "pause", True)
+        with self.lock:
+            self.now = video
+            self.play_on_fill = False
+            self.player.update(pos=0, dur=0, paused=False)
+            self.status = f"Brave で開きました：「{video['title'][:40]}」（見終わったら ⏭ 次へ）"
+            request = self.request
+        self._played(video, request)
+        self.open_bookmark(video["url"], "new", solo=True)
+        threading.Timer(4.0, self.fullscreen).start()
+        if self.web:
+            self._prefetch()
+        self.changed()
+        self.refill()
+
+    # ---- リスト（キュー）の操作：自動で足す・並べ替え・URL から足す・履歴 ----
+    def set_auto(self, on):
+        with self.lock:
+            self.auto = bool(on)
+            self.status = "自動で足します（流し見）" if on else "自動では足しません（リストにあるものだけ流します）"
+        self.changed()
+        if on:
+            self.refill()
+
+    def move(self, i, j):
+        with self.lock:
+            if not (0 <= i < len(self.queue) and 0 <= j < len(self.queue)) or i == j:
+                return
+            self.queue.insert(j, self.queue.pop(i))
+        if self.web:
+            self._prefetch()
+        self.changed()
+
+    def clear_queue(self):
+        with self.lock:
+            self.queue = []
+        if self.web:
+            self._prefetch()
+        self.changed()
+
+    def _resolve(self, url, title=""):
+        """URL からリストに入れる 1 本を作る。YouTube は ID、yt-dlp で流せるサイトは URL、流せないサイトは Brave で開くもの"""
+        m = self.YT_ID.search(url)
+        if m:
+            info = self._probe(f"https://www.youtube.com/watch?v={m.group(1)}", False) or {}
+            return {"id": m.group(1), "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
+                    "channel": info.get("channel")}
+        info = self._probe(url, False)
+        if info:
+            return {"id": f"cast:{info.get('extractor_key', '')}:{info.get('id', '')}", "url": url,
+                    "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
+                    "channel": info.get("uploader") or info.get("extractor_key")}
+        host = urlparse(url).hostname or url
+        return {"id": "web:" + hashlib.sha1(url.encode()).hexdigest()[:12], "url": url, "browser": True,
+                "title": title or url, "duration": 0, "channel": host}
+
+    def add(self, url, where="end", title="", play=False):
+        """リストに足す（URL を貼る・右クリック・共有・履歴から）。where: next（次に流す）/ end（最後に）。play なら今すぐ流す"""
+        url = (url or "").strip()
+        if not url.startswith(("http://", "https://")):
+            self.set_status("足す URL が正しくありません")
+            return
+        self.set_status("リストに足す動画を調べています…")
+        with self._add_lock:  # 続けて足したとき、調べ終わった順ではなく足した順に並ぶように
+            self._add_locked(url, where, title, play)
+
+    _add_lock = threading.Lock()
+
+    def _add_locked(self, url, where, title, play):
+        video = self._resolve(url, title)
+        video["reason"] = video.get("reason") or "自分で足した動画"
+        with self.lock:
+            self.queue = [v for v in self.queue if v["id"] != video["id"]]
+            if play or where == "next":
+                self.queue.insert(0, video)
+            else:
+                self.queue.append(video)
+            self.status = f"リストに足しました：「{video['title'][:40]}」"
+        if not video.get("browser"):
+            self.dub.want(video)  # 外国語なら吹き替えを作り始める（日本語なら何もしない）
+        if play:  # 足すだけでは流さない（じっくり見る用にためておけるように）
+            self.next()
+            return
+        if self.web:
+            self._prefetch()
+        self.changed()
+
+    def history(self, n=60):
+        """流した動画の履歴（新しい順、同じ動画は最後の 1 回だけ）"""
+        out, seen = [], set()
+        try:
+            lines = at.HISTORY.read_text().splitlines()
+        except OSError:
+            return []
+        for line in reversed(lines):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("event") != "played" or r.get("id") in seen:
+                continue
+            seen.add(r.get("id"))
+            vid = r.get("id", "")
+            url = r.get("url") or (f"https://www.youtube.com/watch?v={vid}" if not vid.startswith(("cast:", "web:")) else "")
+            if not url:
+                continue
+            out.append({"id": vid, "url": url, "title": r.get("title"), "channel": r.get("channel"), "ts": r.get("ts"),
+                        "request": r.get("request"), "browser": bool(r.get("browser")), "duration": r.get("duration") or 0})
+            if len(out) >= n:
+                break
+        return out
 
     def _prefetch(self):
         """キューの先頭を先に落としておき、今・先頭以外のファイルは消す"""
         with self.lock:
             keep = ([self.now] if self.now else []) + self.queue[:1]
         for v in keep[1:] if self.now else keep:
-            self.media.fetch(v)
+            if not v.get("browser"):  # Brave で開くものは落とさない
+                self.media.fetch(v)
         self.media.keep_only({media_key(v) for v in keep})
         self._dub_ahead()
 
@@ -1391,6 +1515,10 @@ ACTIONS = {
     "next": lambda b: app.next(),
     "play": lambda b: app.play_index(int(b.get("index", -1))),
     "drop": lambda b: app.drop_index(int(b.get("index", -1))),
+    "move": lambda b: app.move(int(b.get("from", -1)), int(b.get("to", -1))),
+    "clearq": lambda b: app.clear_queue(),
+    "auto": lambda b: app.set_auto(bool(b.get("on"))),
+    "add": lambda b: app.add(str(b.get("url", "")), str(b.get("where", "end")), str(b.get("title", "")), bool(b.get("play"))),
     "reshuffle": lambda b: app.reshuffle(),
     "stop": lambda b: app.stop(),
     "quit": lambda b: app.quit_player(),
@@ -1483,6 +1611,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, buf.getvalue(), "audio/wav")
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}))
+        elif path == "/api/history":
+            self._send(200, json.dumps(app.history(), ensure_ascii=False))
         elif path == "/api/openhosts":
             self._send(200, json.dumps(app.open_hosts()))
         elif path == "/api/bookmarks":
