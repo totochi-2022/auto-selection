@@ -898,7 +898,11 @@ class App:
                         "title": info.get("title") or title or url, "duration": 0, "channel": info.get("channel")}
             return {"id": m.group(1), "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
                     "channel": info.get("channel")}
-        info = self._probe(url, False)
+        # 埋め込みにそろえる方針：yt-dlp で落とせても、ページを埋め込んで流すサイト（あとで sites.py にまとめる）
+        if (urlparse(url).hostname or "").endswith(EMBED_HOSTS):
+            info = None
+        else:
+            info = self._probe(url, False)
         if info and (info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming")):
             info = {"title": info.get("title"), "thumbnail": info.get("thumbnail")} | {"_live": True}  # 生放送（ABEMA のチャンネルなど）は落とせないので Brave で開く
         if info and not info.get("_live"):
@@ -1635,6 +1639,9 @@ class App:
 
 
 app = App()
+
+EMBED_HOSTS = ("abema.tv",)  # 落とさずにページを埋め込んで流すサイト（ABEMA の見逃しの回は 20 分で 700MB ほど落としていた）
+
 
 def wake_screen():
     """リモコンで操作したら、消えた画面（swayidle の wlopm --off）をつける。リモコンの操作は入力に数えられないため。
