@@ -20,6 +20,9 @@
   #veil { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
           color: var(--dim); font-size: 22px; text-align: center; padding: 20px; pointer-events: none; }
   #veil.hidden { display: none; }
+  /* リストの Brave で開くもの（アニメ・生放送など）は、動画の代わりにページ（中のプレーヤーだけのこともある）を埋め込む */
+  #emb { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+  #emb[hidden], video.off { display: none; }
   #unmute { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 18px; }
   #info { padding: 10px 16px 12px; border-top: 1px solid var(--line); }
   #title { font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -57,6 +60,7 @@
 <div id="stage">
   <div id="wrap">
     <video id="v" playsinline disableremoteplayback></video><div id="dsub"></div><div id="pbar"><div id="pbFill"></div><div id="pbDub"></div><div id="pbHead"></div></div><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
+    <iframe id="emb" hidden allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
     <div id="veil">希望をリモコンで入れて「スタート」すると、ここで再生します</div>
     <button class="b" id="unmute" hidden>🔇 音が消えています（押すと音を出す）</button>
   </div>
@@ -137,8 +141,22 @@ function render() {
     veil.textContent = s.picking ? "動画を選んでいます…" : "希望をリモコンで入れて「スタート」すると、ここで再生します";
     veil.classList.remove("hidden");
     if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
+    if ($("emb").dataset.src) { $("emb").removeAttribute("src"); $("emb").dataset.src = ""; $("emb").hidden = true; }
     return;
   }
+  // 埋め込むもの：動画を止めて隠し、iframe にページを入れる（F9 は拡張機能が中の動画を画面いっぱいにする）
+  const emb = $("emb");
+  if (s.now.embed) {
+    veil.classList.add("hidden");
+    if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
+    v.classList.add("off");
+    if (emb.dataset.src !== s.now.embed) { emb.dataset.src = s.now.embed; emb.src = s.now.embed; }
+    emb.hidden = false;
+    return;
+  }
+  if (emb.dataset.src) { emb.removeAttribute("src"); emb.dataset.src = ""; }
+  emb.hidden = true;
+  v.classList.remove("off");
   setDub(s.now.id, st === "ready" && ds ? ds.st : "");
   dubCovered = ds && ds.st === "ready" ? Infinity : ds && ds.st === "partial" ? (ds.covered || 0) : 0;
   if (st === "ready") {
