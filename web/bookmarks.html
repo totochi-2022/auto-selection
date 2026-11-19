@@ -38,6 +38,9 @@
   /* 同じサイトのタブがもうテレビの Brave にある（「同じサイトのタブへ」なら新しく開かずにそこへ飛ぶ） */
   .bm button.open { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--panel2)); }
   .bm button.open::after { content: "開いている"; margin-left: auto; flex: none; font-size: 11px; color: var(--good); }
+  /* 同じサイトのタブが 2 つ以上：数を出す。「同じサイトのタブへ」で押すたびに順に回る */
+  .bm button.open[data-n]::after { content: attr(data-n); min-width: 1.6em; padding: 1px 6px; border-radius: 9px; text-align: center;
+    font-size: 13px; font-weight: bold; background: var(--good); color: var(--panel2); }
   .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
   .tabs button { padding: 10px 4px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
     background: var(--panel2); color: var(--text); cursor: pointer; }
@@ -171,8 +174,13 @@ async function loadBookmarks() {
 function hostOf(u) { try { return new URL(u).host; } catch (e) { return ""; } }
 async function markOpen() {
   try {
-    const hosts = new Set(await (await fetch("/api/openhosts", { headers: { "X-Token": token } })).json());
-    document.querySelectorAll("#bm [data-host]").forEach((b) => b.classList.toggle("open", hosts.has(b.dataset.host)));
+    const n = {};  // ホストごとのタブの数
+    for (const h of await (await fetch("/api/openhosts", { headers: { "X-Token": token } })).json()) n[h] = (n[h] || 0) + 1;
+    document.querySelectorAll("#bm [data-host]").forEach((b) => {
+      const c = n[b.dataset.host] || 0;
+      b.classList.toggle("open", c > 0);
+      if (c > 1) b.dataset.n = c; else delete b.dataset.n;
+    });
   } catch (e) {}
 }
 setInterval(() => { if (!document.hidden) markOpen(); }, 4000);
