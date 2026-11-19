@@ -394,7 +394,8 @@ class App:
     def _restore(self):
         try:
             d = json.loads(self.STATE_FILE.read_text())
-            if time.time() - d.get("t", 0) > 6 * 3600:  # 6 時間より前のものは使わない
+            # 保存は変わったときだけなので、一晩止めておくと 6 時間を超えて消えていた。3 日より前のものだけ使わない
+            if time.time() - d.get("t", 0) > 3 * 86400:
                 return
         except (OSError, ValueError):
             return
@@ -1372,6 +1373,19 @@ class App:
 
 app = App()
 
+def wake_screen():
+    """リモコンで操作したら、消えた画面（swayidle の wlopm --off）をつける。リモコンの操作は入力に数えられないため。
+    wlopm が無い PC（Pi）では何もしない"""
+    if not shutil.which("wlopm"):
+        return
+    env = at.mpv_env()
+    try:
+        if " off" in subprocess.run(["wlopm"], env=env, capture_output=True, text=True, timeout=2).stdout:
+            subprocess.run(["wlopm", "--on", "*"], env=env, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 ACTIONS = {
     "start": lambda b: app.start(b.get("request", ""), b.get("opts") or {}),
     "next": lambda b: app.next(),
@@ -1496,6 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
             # 重い処理（mpv 起動など）で応答を待たせないよう別スレッドで実行する
             threading.Thread(target=ACTIONS[name], args=(body,), daemon=True).start()
+            threading.Thread(target=wake_screen, daemon=True).start()
         except (ValueError, TypeError) as e:
             return self._send(400, json.dumps({"error": str(e)}))
         self._send(200, '{"ok":true}')
