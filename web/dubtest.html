@@ -47,9 +47,10 @@ const scheduled = new Map();     // 文の番号 -> 鳴らす予約（AudioBuffe
 let made = 0, late = 0;
 
 v.src = `/dubvideo/${encodeURIComponent(id)}`;
-fetch(`/script/${encodeURIComponent(id)}`).then((r) => r.json()).then((d) => {
+const variant = new URLSearchParams(location.search).get("v") || "";  // ?v=opus などで比べる版の台本
+fetch(`/script/${encodeURIComponent(id)}${variant ? "?v=" + encodeURIComponent(variant) : ""}`).then((r) => r.json()).then((d) => {
   lines = d.lines || [];
-  $("info").textContent = `台本 ${lines.length} 文（${d.lang === "ja" ? "日本語の字幕から" : "英語から訳した"}）`;
+  $("info").textContent = `台本 ${lines.length} 文（${d.lang === "ja" ? "日本語の字幕から" : "英語から訳した"}${d.variant ? "・配役 " + d.variant : ""}）`;
 }).catch(() => { $("info").textContent = "台本がありません"; });
 
 // その文に使える時間：この文の始まりから次の文の始まりまで（最後の文は終わり＋3 秒）

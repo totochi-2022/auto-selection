@@ -1441,7 +1441,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (WEB_DIR / "dubtest.html").read_bytes(), "text/html; charset=utf-8")
         elif path.startswith("/script/"):  # 台本（~/.cache/autotube/dub/ID.script.json）
             key = path.removeprefix("/script/")
-            f = dubmod.OUT / f"{key}.script.json"
+            var = parse_qs(urlparse(self.path).query).get("v", [""])[0]  # 比べる版（opus など）
+            f = dubmod.OUT / (f"{key}.{var}.script.json" if re.fullmatch(r"\w+", var or "-") else f"{key}.script.json")
             if re.fullmatch(r"[\w-]+", key) and f.exists():
                 self._send(200, f.read_bytes())
             else:
