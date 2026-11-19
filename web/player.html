@@ -22,7 +22,10 @@
   #veil.hidden { display: none; }
   /* リストの Brave で開くもの（アニメ・生放送など）は、動画の代わりにページ（中のプレーヤーだけのこともある）を埋め込む */
   #emb { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
-  #emb[hidden], video.off { display: none; }
+  #emb[hidden], video.off, #ytbox[hidden] { display: none; }
+  /* YouTube は埋め込みのプレーヤー（IFrame API）で流す。吹き替えもこの上に重ねる */
+  #ytbox, #ytbox iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #dsub, #pbar { z-index: 2; }  /* 吹き替えの字幕と下のバーは埋め込みの上に */
   #unmute { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 18px; }
   #info { padding: 10px 16px 12px; border-top: 1px solid var(--line); }
   #title { font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -60,6 +63,7 @@
 <div id="stage">
   <div id="wrap">
     <video id="v" playsinline disableremoteplayback></video><div id="dsub"></div><div id="pbar"><div id="pbFill"></div><div id="pbDub"></div><div id="pbHead"></div></div><!-- disableremoteplayback：左上に出るキャストのボタンを消す -->
+    <div id="ytbox" hidden><div id="ytp"></div></div>
     <iframe id="emb" hidden allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe>
     <div id="veil">希望をリモコンで入れて「スタート」すると、ここで再生します</div>
     <button class="b" id="unmute" hidden>🔇 音が消えています（押すと音を出す）</button>
@@ -81,7 +85,60 @@
 </aside>
 <script>
 const $ = (id) => document.getElementById(id);
-const v = $("v");
+const vid = $("v");
+
+// YouTube の埋め込みのプレーヤーを <video> と同じ形で扱う（吹き替え・位置・操作は M＝今の動画 だけを見る）
+class YTMedia extends EventTarget {
+  constructor() { super(); this.p = null; this.ready = null; this.id = ""; this._t = 0; this._paused = true; this._vol = 1; this._muted = false; }
+  load(id) {
+    this.id = id; this._t = 0; this._paused = true;
+    if (!this.ready) {
+      this.ready = new Promise((res) => {
+        window.onYouTubeIframeAPIReady = () => {
+          this.p = new YT.Player("ytp", { videoId: id, playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+            events: { onReady: () => { this.p.setVolume(this._vol * 100); res(); },
+                      onStateChange: (e) => this._state(e.data),
+                      onPlaybackRateChange: () => this._ev("ratechange"),
+                      onError: (e) => this._ev("error", e.data) } });
+        };
+        const sc = document.createElement("script"); sc.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(sc);
+      });
+    } else this.ready.then(() => this.p.loadVideoById(id));
+    if (!this._poll) this._poll = setInterval(() => this._tick(), 250);
+  }
+  stop() { this.id = ""; if (this.p && this.p.stopVideo) this.p.stopVideo(); }
+  _ev(type, detail) { const e = new Event(type); e.detail = detail; this.dispatchEvent(e); }
+  _state(st) {
+    if (st === 1) { this._paused = false; this._ev("play"); }
+    else if (st === 2) { this._paused = true; this._ev("pause"); }
+    else if (st === 0) { this._paused = true; this._ev("ended"); }
+    else if (st === 3) this._ev("seeking");
+  }
+  _tick() {
+    if (!this.p || !this.p.getCurrentTime || !this.id) return;
+    const t = this.p.getCurrentTime(), exp = this._t + (this._paused ? 0 : 0.25 * this.playbackRate);
+    const jumped = Math.abs(t - exp) > 1.5;
+    this._t = t;
+    if (jumped) { this._ev("seeking"); this._ev("seeked"); }
+    this._ev("timeupdate");
+  }
+  get currentTime() { return this.p && this.p.getCurrentTime ? this.p.getCurrentTime() : 0; }
+  set currentTime(t) { if (this.p) { this.p.seekTo(t, true); this._t = t; this._ev("seeking"); this._ev("seeked"); } }
+  get duration() { return this.p && this.p.getDuration ? this.p.getDuration() : 0; }
+  get paused() { return this._paused; }
+  get seeking() { return false; }
+  get playbackRate() { return this.p && this.p.getPlaybackRate ? this.p.getPlaybackRate() : 1; }
+  get volume() { return this._vol; }
+  set volume(x) { this._vol = x; if (this.p && this.p.setVolume) this.p.setVolume(Math.round(x * 100)); }
+  get muted() { return this._muted; }
+  set muted(m) { this._muted = m; if (this.p) m ? this.p.mute() : this.p.unMute(); this._ev("volumechange"); }
+  play() { if (this.p) this.p.playVideo(); return Promise.resolve(); }
+  pause() { if (this.p) this.p.pauseVideo(); }
+}
+const yt = new YTMedia();
+let M = vid;  // 今の動画（<video> か YouTube の埋め込み）
+const on = (ev, fn) => { vid.addEventListener(ev, fn); yt.addEventListener(ev, fn); };
+const v = vid;  // <video> そのもの（落としたファイル用）
 let state = null;
 
 const post = (name, body = {}) =>
@@ -142,8 +199,24 @@ function render() {
     veil.classList.remove("hidden");
     if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
     if ($("emb").dataset.src) { $("emb").removeAttribute("src"); $("emb").dataset.src = ""; $("emb").hidden = true; }
+    if (yt.id) { yt.stop(); $("ytbox").hidden = true; }
     return;
   }
+  // YouTube：埋め込みのプレーヤーで流す（吹き替えは M＝yt に合わせて重ねる）
+  if (s.now.yt) {
+    veil.classList.add("hidden");
+    if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
+    v.classList.add("off");
+    if ($("emb").dataset.src) { $("emb").removeAttribute("src"); $("emb").dataset.src = ""; $("emb").hidden = true; }
+    $("ytbox").hidden = false;
+    M = yt;
+    if (yt.id !== s.now.yt) { dubStop(); yt.load(s.now.yt); }
+    setDub(s.now.id, ds ? ds.st : "");
+    dubCovered = ds && ds.st === "ready" ? Infinity : ds && ds.st === "partial" ? (ds.covered || 0) : 0;
+    return;
+  }
+  if (yt.id) { yt.stop(); $("ytbox").hidden = true; }
+  M = vid;
   // 埋め込むもの：動画を止めて隠し、iframe にページを入れる（F9 は拡張機能が中の動画を画面いっぱいにする）
   const emb = $("emb");
   if (s.now.embed) {
@@ -193,16 +266,16 @@ v.addEventListener("volumechange", () => { if (!v.muted) $("unmute").hidden = tr
 const DUB_ORIG = 0.25, LOOKAHEAD = 8, VOICE = { M: 13, F: 3 };
 let dubCovered = 0;  // 吹き替えがあるところ（秒、全部なら Infinity）。下の細いバーで青く出す
 setInterval(() => {
-  const d = v.duration || 0;
-  $("pbFill").style.width = d ? Math.min(100, v.currentTime / d * 100) + "%" : "0";
-  $("pbHead").style.left = d ? `calc(${Math.min(100, v.currentTime / d * 100)}% - 1px)` : "0";
+  const d = M.duration || 0;
+  $("pbFill").style.width = d ? Math.min(100, M.currentTime / d * 100) + "%" : "0";
+  $("pbHead").style.left = d ? `calc(${Math.min(100, M.currentTime / d * 100)}% - 1px)` : "0";
   $("pbDub").style.width = d && dubKey ? Math.min(100, dubCovered / d * 100) + "%" : "0";
 }, 500);
 let dubKey = "", dubLines = [], dubPartial = false, dubFetchAt = 0, baseVol = 1, actx = null, gain = null;
 const dubCache = new Map(), dubSched = new Map();
 function applyVol() {
-  v.volume = baseVol * (dubKey && dubLines.length ? DUB_ORIG : 1);
-  if (gain) gain.gain.value = v.muted ? 0 : baseVol;
+  M.volume = baseVol * (dubKey && dubLines.length ? DUB_ORIG : 1);
+  if (gain) gain.gain.value = M.muted ? 0 : baseVol;
 }
 function audio() {  // 音を鳴らす準備（ブラウザは操作のあとでないと鳴らさせないので、再生や「音を出す」のときに作る・再開する）
   if (!actx) { actx = new AudioContext(); gain = actx.createGain(); gain.connect(actx.destination); applyVol(); }
@@ -250,8 +323,8 @@ function synth(i) {
   return dubCache.get(k);
 }
 function dubTick() {
-  if (!dubKey || !dubLines.length || v.paused || v.seeking || !actx) return;
-  const now = v.currentTime, key = dubKey;
+  if (!dubKey || !dubLines.length || M.paused || M.seeking || !actx) return;
+  const now = M.currentTime, key = dubKey;
   for (let i = 0; i < dubLines.length; i++) {
     const L = dubLines[i];
     if (L.t > now + LOOKAHEAD) break;
@@ -259,38 +332,40 @@ function dubTick() {
     if (L.t + room(i) < now || dubSched.has(k)) continue;
     dubSched.set(k, null);
     synth(i).then((buf) => {
-      if (key !== dubKey || !dubSched.has(k) || dubSched.get(k) || v.paused) return;
-      const off = v.currentTime - L.t;
+      if (key !== dubKey || !dubSched.has(k) || dubSched.get(k) || M.paused) return;
+      const off = M.currentTime - L.t;
       if (off >= buf.duration) return;
       const src = actx.createBufferSource();
-      src.buffer = buf; src.playbackRate.value = v.playbackRate; src.connect(gain);
-      if (off < 0) src.start(actx.currentTime - off / v.playbackRate); else src.start(0, off);
+      src.buffer = buf; src.playbackRate.value = M.playbackRate; src.connect(gain);
+      if (off < 0) src.start(actx.currentTime - off / M.playbackRate); else src.start(0, off);
       dubSched.set(k, src);
     }).catch(() => { dubSched.delete(k); });
   }
 }
 setInterval(dubTick, 250);
-for (const ev of ["seeking", "pause", "ratechange", "emptied"]) v.addEventListener(ev, dubStop);
-for (const ev of ["seeked", "play", "ratechange"]) v.addEventListener(ev, () => { if (dubKey) audio(); setTimeout(dubTick, 0); });
-v.addEventListener("volumechange", applyVol);
-v.addEventListener("timeupdate", () => {  // 吹き替えの字幕（今の文）
+for (const ev of ["seeking", "pause", "ratechange", "emptied"]) on(ev, dubStop);
+for (const ev of ["seeked", "play", "ratechange"]) on(ev, () => { if (dubKey) audio(); setTimeout(dubTick, 0); });
+on("volumechange", applyVol);
+on("timeupdate", () => {  // 吹き替えの字幕（今の文）
   if (!dubKey) return;
-  const now = v.currentTime;
+  const now = M.currentTime;
   const i = dubLines.findIndex((L, k) => L.t <= now && now < L.t + Math.min(room(k), Math.max(2.5, L.end - L.t + 1)));
   $("dsub").textContent = i >= 0 ? dubLines[i].ja : "";
 });
 
-v.addEventListener("ended", () => post("next"));
+on("ended", () => post("next"));
+// YouTube の埋め込みが断られた（101・150＝埋め込み禁止など）→ 落として流す
+yt.addEventListener("error", (e) => post("ytfail", { code: e.detail }));
 v.addEventListener("error", () => { if (v.dataset.key) $("veil").textContent = "再生できませんでした（⏭ 次へ）"; });
 let lastPos = 0;
-const sendPos = () => post("webpos", { pos: v.currentTime, dur: v.duration || 0, paused: v.paused, muted: v.muted, volume: baseVol });
-v.addEventListener("timeupdate", () => { if (Date.now() - lastPos > 2000) { lastPos = Date.now(); sendPos(); } $("pos").textContent = `${fmt(v.currentTime)} / ${fmt(v.duration)}`; });
-v.addEventListener("pause", sendPos);
-v.addEventListener("play", sendPos);
-v.addEventListener("click", () => (v.paused ? v.play() : v.pause()));
+const sendPos = () => post("webpos", { pos: M.currentTime, dur: M.duration || 0, paused: M.paused, muted: M.muted, volume: baseVol });
+on("timeupdate", () => { if (Date.now() - lastPos > 2000) { lastPos = Date.now(); sendPos(); } $("pos").textContent = `${fmt(M.currentTime)} / ${fmt(M.duration)}`; });
+on("pause", sendPos);
+on("play", sendPos);
+v.addEventListener("click", () => (M.paused ? M.play() : M.pause()));
 
 $("next").onclick = () => post("next");
-$("mpv").onclick = async () => { v.pause(); await post("web", { on: false }); location.href = "/"; };
+$("mpv").onclick = async () => { M.pause(); await post("web", { on: false }); location.href = "/"; };
 
 // リモコンからの操作（web.py の ctl。番号が増えたら実行。開いた時点の番号は実行しない）
 let lastCtl = null;
@@ -298,11 +373,11 @@ function applyCtl(c) {
   if (!c || lastCtl === null) { lastCtl = c ? c.id : 0; return; }
   if (c.id <= lastCtl) return;
   lastCtl = c.id;
-  if (!v.dataset.key) return;
-  if (c.cmd === "pause") v.paused ? v.play().catch(() => {}) : v.pause();
-  else if (c.cmd === "seek") v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + Number(c.arg || 0)));
-  else if (c.cmd === "volume") { baseVol = Math.max(0, Math.min(1, Number(c.arg) / 100)); v.muted = false; applyVol(); }
-  else if (c.cmd === "mute") v.muted = !v.muted;
+  if (!v.dataset.key && !yt.id) return;
+  if (c.cmd === "pause") M.paused ? M.play().catch(() => {}) : M.pause();
+  else if (c.cmd === "seek") M.currentTime = Math.max(0, Math.min(M.duration || Infinity, M.currentTime + Number(c.arg || 0)));
+  else if (c.cmd === "volume") { baseVol = Math.max(0, Math.min(1, Number(c.arg) / 100)); M.muted = false; applyVol(); }
+  else if (c.cmd === "mute") M.muted = !M.muted;
   sendPos();
 }
 

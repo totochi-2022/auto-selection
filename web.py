@@ -711,9 +711,9 @@ class App:
                            **({"thumb": video["thumb"]} if video.get("thumb") else {})})
 
     def play(self, video):
-        # ブラウザで再生するモードでは、YouTube のライブ（長さ 0）は落とせないので Brave の YouTube のページで
-        if self.web and not video.get("duration") and media_key(video) == video.get("id"):
-            video = {**video, "browser": True, "live": True, "url": f"https://www.youtube.com/watch?v={video['id']}"}
+        # ブラウザで再生するモードでは、YouTube（ライブも）は落とさず YouTube の埋め込みのプレーヤーで流す（埋め込み禁止なら ytfail で落とす）
+        if self.web and media_key(video) == video.get("id") and not video.get("ytfail"):
+            return self._play_web({**video, "yt": video["id"]})
         if video.get("browser"):
             return self._play_browser(video)
         if self.web:
@@ -745,7 +745,8 @@ class App:
             self.status = f"「{video['title'][:40]}」"
             request = self.request
         self._played(video, request)
-        self.media.fetch(video)
+        if not video.get("yt"):
+            self.media.fetch(video)
         self._prefetch()
         self.changed()
         self.refill()
@@ -848,6 +849,21 @@ class App:
             subprocess.run([str(tvfs), "video", "unmute"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # ---- リスト（キュー）の操作：自動で足す・並べ替え・URL から足す・履歴 ----
+    def yt_fail(self, code=0):
+        """YouTube の埋め込みが断られた（埋め込み禁止の動画など）：落として流す今までのやり方に切り替える"""
+        with self.lock:
+            v = self.now
+            if not v or not v.get("yt"):
+                return
+            v = {**v, "yt": None, "ytfail": True}
+            self.now = v
+            self.status = f"埋め込みで流せない動画でした（{code}）。落としてから流します…"
+        if v.get("duration"):
+            self.media.fetch(v)
+        else:
+            self.set_status("埋め込みで流せないライブでした（⏭ 次へ）")
+        self.changed()
+
     def set_auto(self, on):
         with self.lock:
             self.auto = bool(on)
@@ -982,7 +998,9 @@ class App:
         with self.lock:
             keep = ([self.now] if self.now else []) + self.queue[:1]
         for v in keep[1:] if self.now else keep:
-            if not v.get("browser") and (v.get("duration") or media_key(v) != v.get("id")):  # Brave で開くもの・ライブは落とさない
+            # Brave で開くもの・ライブ・YouTube（埋め込みで流す）は落とさない。埋め込み禁止だった YouTube（ytfail）だけ落とす
+            yt = media_key(v) == v.get("id")
+            if not v.get("browser") and v.get("duration") and (not yt or v.get("ytfail") or not self.web):
                 self.media.fetch(v)
         self.media.keep_only({media_key(v) for v in keep})
         self._dub_ahead()
@@ -1636,6 +1654,7 @@ ACTIONS = {
     "next": lambda b: app.next(),
     "play": lambda b: app.play_index(int(b.get("index", -1))),
     "drop": lambda b: app.drop_index(int(b.get("index", -1))),
+    "ytfail": lambda b: app.yt_fail(b.get("code", 0)),
     "move": lambda b: app.move(int(b.get("from", -1)), int(b.get("to", -1))),
     "clearq": lambda b: app.clear_queue(),
     "auto": lambda b: app.set_auto(bool(b.get("on"))),
