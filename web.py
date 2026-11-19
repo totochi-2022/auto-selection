@@ -240,6 +240,8 @@ class Media:
         return None
 
     def fetch(self, video):
+        if video.get("browser") or video.get("live"):  # Brave で開くもの・ライブは落とさない（落とし終わらない）
+            return
         key = media_key(video)
         with self.lock:
             if self.state.get(key) in ("loading", "ready"):
@@ -922,7 +924,7 @@ class App:
             now = self.now
         if on:
             self.mpv.kill()
-            if now:
+            if now and not now.get("browser"):  # Brave で開いているものはそのまま
                 self._play_web(now)
             else:
                 self._prefetch()
@@ -1303,6 +1305,11 @@ class App:
         """テレビの画面を動画に切り替える：mpv があれば mpv の窓、無ければ Brave のプレーヤーのタブ（無ければ開く）。
         そのあと solo-here（Shift＋F7 と同じ）で、ほかのタブの動画を一時停止し、ここで止めていたものは再開する"""
         if not self.WIN_FOCUS.exists():
+            return
+        with self.lock:
+            now = self.now
+        if now and now.get("browser"):  # 今のものが Brave で開くもの（アニメ・ABEMA など）なら、そのタブへ
+            self.open_bookmark(now["url"], "exact", solo=True)
             return
         for cmd in (self.WIN_FOCUS, self.WIN_FOCUS.with_name("solo-here")):
             if cmd.exists():
