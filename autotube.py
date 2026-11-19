@@ -90,13 +90,14 @@ def ensure_prefs():
         shutil.copy(BASE / "prefs.example.md", PREFS)  # 好みメモは個人用なので git 管理外
 
 
-def ask_claude(prompt, web=False):
-    """claude -p に聞いて、返事の中の JSON を取り出す。web=True ならネット検索（WebSearch）を使わせる"""
+def ask_claude(prompt, web=False, model=None, timeout=None):
+    """claude -p に聞いて、返事の中の JSON を取り出す。web=True ならネット検索（WebSearch）を使わせる。
+    model：ふだんは CLAUDE_MODEL（haiku）。吹き替えの配役のように全体を見て考える仕事は sonnet など"""
     tools = ["--tools", "WebSearch", "--allowedTools", "WebSearch"] if web else ["--tools", ""]
     r = subprocess.run(
-        ["claude", "-p", "--model", CLAUDE_MODEL, *tools,
+        ["claude", "-p", "--model", model or CLAUDE_MODEL, *tools,
          "--no-session-persistence", "--output-format", "text"],
-        input=prompt, capture_output=True, text=True, timeout=300 if web else 180, cwd=DATA,
+        input=prompt, capture_output=True, text=True, timeout=timeout or (300 if web else 180), cwd=DATA,
     )
     text = r.stdout.strip()
     try:

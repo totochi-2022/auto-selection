@@ -118,6 +118,43 @@ def speakable(ja):
     return bool(t)
 
 
+CAST_MODEL = "sonnet"  # 配役を決める Claude（台本全体を見て、掛け合いを追う）
+
+
+def assign_roles(lines):
+    """訳し終わった台本全体を見て、配役を決め直す（lines の who・sp を書き換える）。
+    lines: [{"t", "who", "sp", "ja", "en"}]。en の ">>" は話す人が変わった印"""
+    rows = "\n".join(f"[{n}] {x['t']:.1f}s 仮:{x.get('who') or '?'} | {x['en']} | {x['ja']}" for n, x in enumerate(lines))
+    obj = at.ask_claude(f"""映画・動画の吹き替えの配役を決めてください。下は台本全体です（番号・時刻・仮の話者・英語の字幕・日本語訳）。
+英語の ">>" は話す人が変わった印です（誰に変わったかは書いていない）。仮の話者は細切れに推測したもので、間違いが多いです。
+
+手順:
+1. 場面の切れ目と、それぞれの場面に出ている登場人物を整理する
+2. 同じ人の別の呼び方（あだ名・偽名・「男1」など）は 1 人にまとめ、呼び名を決める（名前が分かればカタカナの名前）
+3. 文ごとに、誰のセリフかを決める。">>" の位置、呼びかけ（名前を呼ばれた人は話していない）、質問と答えの流れ、
+   話し方の癖で判断する。">>" が無いところは、たいてい前の文と同じ人
+4. 登場人物ごとに男性（M）か女性（F）かを決める
+
+台本:
+{rows}
+
+次の JSON だけを出力してください（説明は不要）。roles は全部の番号について:
+{{"cast": {{"呼び名": "M" または "F"}}, "roles": [{{"n": 番号, "who": "呼び名"}}]}}""", model=CAST_MODEL, timeout=600)
+    cast = (obj or {}).get("cast") or {}
+    got = 0
+    for r in (obj or {}).get("roles") or []:
+        try:
+            n = int(r["n"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if 0 <= n < len(lines) and r.get("who"):
+            lines[n]["who"] = str(r["who"])
+            lines[n]["sp"] = cast.get(lines[n]["who"], lines[n].get("sp", "M"))
+            got += 1
+    log(f"配役を決め直した: {got}/{len(lines)} 文、登場人物 {len(cast)} 人 {cast}")
+    return lines
+
+
 MALE_VOICES = [13, 11, 12, 21, 52, 53]   # 青山龍星・玄野武宏・白上虎太郎・剣崎雌雄・雀松朱司・麒ヶ島宗麟
 FEMALE_VOICES = [2, 8, 14, 10, 9, 3]     # 四国めたん・春日部つむぎ・冥鳴ひまり・雨晴はう・波音リツ・ずんだもん
 
