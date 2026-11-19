@@ -22,7 +22,7 @@ web.py・content.js の本体にはサイトの名前を書かない。
 | 6 | 音が出る | 音 | Brave の自動再生のポリシー（`/etc/brave/policies/managed/tonzura-autoplay.json`）。ミュートで始まるプレーヤーは `tvfs video unmute` |
 | 7 | F9 で動画だけが画面いっぱい | テレビ | 拡張機能の fill。広がらなければ、動画の親の CSS（transform など）を見る |
 | 8 | 別のタブへ移って戻っても全画面のまま | テレビ | プレーヤーの wantFs（戻ったら web.py が本物の F9 を送る） |
-| 9 | 字幕（焼き込みでないもの）が出ない | テレビ | sites.js の `hideSubs` に字幕の CSS。F6＋C で出し入れ |
+| 9 | 字幕（焼き込みでないもの）が出ない | テレビ | JW Player なら sites.js の `jwCaptionsOff`（決まった操作 setCurrentCaptions(0) をページの中で呼ぶ）。それ以外は `hideSubs` に字幕の CSS。F6＋C で出し入れ |
 | 10 | 案内・ポップアップが邪魔しない | テレビ | sites.js の `dismiss` に閉じるボタンの文字 |
 | 11 | 終わったら次へ進む | 最後まで流す | （まだ。拡張機能から「終わった」を知らせる仕組みはこれから） |
 
@@ -32,6 +32,6 @@ web.py・content.js の本体にはサイトの名前を書かない。
 |---|---|---|---|
 | YouTube | 落とさない（IFrame API。埋め込み禁止のときだけ落とす） | 埋め込み用の URL | 字幕を外す（プレーヤー側）・ライブのチャットを隠す |
 | ABEMA | 落とさない | ページごと | 「好きなジャンルを選んで」を閉じる |
-| gogoanime | 落とさない | 中のプレーヤー（data-src → megaplay） | megaplay の字幕を隠す |
-| KissAnime | 落とさない | 中のプレーヤー（gogo-player.php → megaplay） | megaplay の字幕を隠す |
+| gogoanime | 落とさない | 中のプレーヤー（data-src → megaplay.su、JW Player） | JW Player の字幕を切る |
+| KissAnime | 落とさない | 中のプレーヤー（gogo-player.php → megaplay.buzz、JW Player＋自作の ASS 字幕） | JW Player の字幕を切る（CSS・メニューを押すのは効かなかった） |
 | それ以外 | yt-dlp で流せれば落とす。流せなければページごと埋め込む | ページごと | なし |
