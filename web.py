@@ -821,6 +821,7 @@ class App:
                     "channel": info.get("uploader") or info.get("extractor_key"), "thumb": info.get("thumbnail")}
         host = urlparse(url).hostname or url
         return {"id": "web:" + hashlib.sha1(url.encode()).hexdigest()[:12], "url": url, "browser": True,
+                **({"live": True} if (info or {}).get("_live") else {}),
                 "title": title or (info or {}).get("title") or url, "duration": 0, "channel": host,
                 "thumb": (info or {}).get("thumbnail")}
 
