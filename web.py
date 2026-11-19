@@ -757,7 +757,7 @@ class App:
             self.status = f"Brave で開きました：「{video['title'][:40]}」（見終わったら ⏭ 次へ）"
             request = self.request
         self._played(video, request)
-        self.open_bookmark(video["url"], "new", solo=True)
+        self.open_bookmark(video["url"], "exact", solo=True)  # 同じ URL のタブがもうあればそこへ
         threading.Timer(4.0, self.fullscreen).start()
         if self.web:
             self._prefetch()
@@ -797,13 +797,15 @@ class App:
             return {"id": m.group(1), "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
                     "channel": info.get("channel")}
         info = self._probe(url, False)
-        if info:
+        if info and (info.get("is_live") or info.get("live_status") in ("is_live", "is_upcoming")):
+            info = {"title": info.get("title")} | {"_live": True}  # 生放送（ABEMA のチャンネルなど）は落とせないので Brave で開く
+        if info and not info.get("_live"):
             return {"id": f"cast:{info.get('extractor_key', '')}:{info.get('id', '')}", "url": url,
                     "title": info.get("title") or title or url, "duration": info.get("duration") or 0,
                     "channel": info.get("uploader") or info.get("extractor_key")}
         host = urlparse(url).hostname or url
         return {"id": "web:" + hashlib.sha1(url.encode()).hexdigest()[:12], "url": url, "browser": True,
-                "title": title or url, "duration": 0, "channel": host}
+                "title": title or (info or {}).get("title") or url, "duration": 0, "channel": host}
 
     def add(self, url, where="end", title="", play=False):
         """リストに足す（URL を貼る・右クリック・共有・履歴から）。where: next（次に流す）/ end（最後に）。play なら今すぐ流す"""
@@ -1180,7 +1182,7 @@ class App:
 
     def open_bookmark(self, url, how, solo=False):
         """テレビの Brave で URL を開く（拡張機能 tv-fullscreen に中継 tvfs で）。how: site / new / here"""
-        if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here"):
+        if not url.startswith(("http://", "https://")) or how not in ("site", "new", "here", "exact"):
             return
         env = at.mpv_env()
         tvfs = Path.home() / ".local/bin/tvfs"
