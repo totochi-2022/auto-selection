@@ -84,7 +84,9 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 | 消えた回（アニメのサイト） | https://gogoanime.by/sekai-saikyou-no-majo-hajimemashita-episode-99-english-subbed/（無い回の番号で作れる。KissAnime も同じ） | 200 でトップページへ転送されるので、それを消えたとみなしてすぐ飛ばす |
 | YouTube のメンバー限定 | https://www.youtube.com/watch?v=Pw0wchRQJac | エラー 150 か「始まる前に終わった」で飛ばす |
 | 動画の無いページ | https://example.com/ | 45 秒で飛ばす |
-| （有料だったはず） | https://abema.tv/video/episode/536-1_s1_p15 | ページは free:false だが、今は無料の期間で流れる。有料の見本にはならない |
+| ABEMA の有料（先行配信） | https://abema.tv/video/episode/210-18_s1_p21 | 45 秒で飛ばす（ページの印は free:false・someFree:true） |
+| ABEMA の有料（通常） | https://abema.tv/video/episode/210-18_s1_p5 | 45 秒で飛ばす |
+| （有料の印でも流れるもの） | https://abema.tv/video/episode/536-1_s1_p15 | ページの印は free:false だが、無料の期間で流れる。ページの印だけで有料と決めない理由 |
 
 1. 次に正常なもの（例：gogoanime）を `api/add` で足してから、見本を `"play":true` で流す。
 2. `tvprobe wait-next 100` で次へ進むか。消えたページは数秒、動画の無いページは 45〜50 秒。
@@ -99,7 +101,7 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 |---|---|---|---|---|---|---|---|
 | YouTube（埋め込み） | ○ | ○ | ○（直した） | ○ | ○ | ○（プレーヤーで外す） | ○ |
 | ABEMA | ○ | ○ | 未 | ○ | ○ | — | ○ |
-| gogoanime | ○ | ○ | 未 | ○ | 未 | ○ | ○ |
+| gogoanime | ○ | ○ | 未 | ○ | 未 | ×（焼き込み） | ○ |
 | KissAnime | ○ | ○ | ○ | 未 | 未 | ○ | ○ |
 
 まだ試していないこと：F6 を押しながらのキー（本物のキーの組み合わせ。`pkey` は修飾キーしか押したままにできない）。中の処理は `tvfs video` と同じ。

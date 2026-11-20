@@ -45,6 +45,6 @@ sites.py・sites.js に個別に書く。
 |---|---|---|---|
 | YouTube | 落とさない（IFrame API。埋め込み禁止のときだけ落とす） | 埋め込み用の URL | 字幕を外す（プレーヤー側）・ライブのチャットを隠す |
 | ABEMA | 落とさない | ページごと | 「好きなジャンルを選んで」を閉じる |
-| gogoanime | 落とさない | 中のプレーヤー（data-src → megaplay.su） | なし（JW Player として扱う） |
+| gogoanime | 落とさない | 中のプレーヤー（data-src → megaplay.su） | なし（JW Player として扱う。英語の字幕は映像に焼き込み。JW Player の字幕の一覧は Off だけ） |
 | KissAnime | 落とさない | 中のプレーヤー（gogo-player.php → megaplay.buzz） | なし（JW Player として扱う。自作の ASS 字幕も JW Player の操作で消えた。CSS・メニューを押すのは効かなかった） |
 | それ以外 | yt-dlp で流せれば落とす。流せなければページごと埋め込む | ページごと | なし |
