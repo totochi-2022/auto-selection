@@ -1448,6 +1448,24 @@ class App:
         if tvfs.exists():
             subprocess.run([str(tvfs), "video", cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def video_state(self):
+        """リモコンのシークバー用：video() が操作するのと同じ動画の位置・長さ・止まっているか（無ければ None）"""
+        env = at.mpv_env()
+        front = subprocess.run(["wlrctl", "toplevel", "list", "state:active"], capture_output=True, text=True,
+                               env=env).stdout.partition(":")[0].strip()
+        if front == "mpv" and self.mpv.alive():
+            with self.lock:
+                p = self.player
+                return {"t": p.get("pos") or 0, "d": p.get("dur") or 0, "paused": bool(p.get("paused"))}
+        tvfs = Path.home() / ".local/bin/tvfs"
+        if not tvfs.exists():
+            return None
+        try:
+            out = subprocess.run([str(tvfs), "vstate"], env=env, capture_output=True, text=True, timeout=3).stdout
+            return json.loads(out) if out.strip() else None
+        except (subprocess.SubprocessError, ValueError):
+            return None
+
     def fullscreen(self):
         """F6（単独）と同じく、テレビの手前の窓に F9 を送る（Brave なら拡張機能 tv-fullscreen が動画を全画面に、もう一度で戻る）。
         ページからの命令では全画面にできない（ユーザーの操作が要る）ので、本物のキーとして pkey で送る"""
@@ -1863,6 +1881,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, page, "text/html; charset=utf-8")
         elif path == "/api/history":
             self._send(200, json.dumps(app.history(), ensure_ascii=False))
+        elif path == "/api/vstate":  # ブックマークのページのシークバー（1 秒ごと。画面はつけない）
+            self._send(200, json.dumps(app.video_state()))
         elif path == "/api/openhosts":
             self._send(200, json.dumps(app.open_hosts()))
         elif path == "/api/bookmarks":

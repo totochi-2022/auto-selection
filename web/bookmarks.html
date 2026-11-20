@@ -50,7 +50,7 @@
   .vol { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
   .vol button { flex: 0 0 52px; }
   .vol input { flex: 1; min-width: 0; accent-color: var(--accent); height: 32px; }
-  .vol span { flex: 0 0 3em; text-align: right; color: var(--muted); font-size: 13px; }
+  .vol span { flex: 0 0 auto; min-width: 3em; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .how { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .seg label { cursor: pointer; }
@@ -83,8 +83,8 @@
   </div>
   <div class="vol">
     <button data-v="voldown" title="音量を下げる">🔉</button>
-    <input type="range" id="seek" min="0" max="100" step="1" value="0" title="動画のその割合の位置へ（離したときに移動）">
-    <span id="seekPct">0%</span>
+    <input type="range" id="seek" min="0" max="100" step="0.1" value="0" title="動画のその割合の位置へ（離したときに移動）">
+    <span id="seekPct">--:--</span>
     <button data-v="volup" title="音量を上げる">🔊</button>
   </div>
   <div class="how">
@@ -142,11 +142,35 @@ document.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click",
   api("video", { cmd: b.dataset.v });
   $("msg").textContent = b.title;
 }));
-$("seek").addEventListener("input", () => { $("seekPct").textContent = $("seek").value + "%"; });
+// シークバーは今の動画の位置に合わせて動く（1 秒ごとに /api/vstate）。つまんでいる間と、離して飛んだ直後の 2.5 秒は合わせない
+let seekDrag = false, seekHold = 0, vDur = 0;
+const fmt = (t) => { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
+const seekLabel = () => { const p = Number($("seek").value);
+  $("seekPct").textContent = vDur ? `${fmt(vDur * p / 100)} / ${fmt(vDur)}` : Math.round(p) + "%"; };
+["pointerdown", "touchstart", "mousedown"].forEach((e) => $("seek").addEventListener(e, () => { seekDrag = true; }, { passive: true }));
+$("seek").addEventListener("input", () => { seekDrag = true; seekLabel(); });
 $("seek").addEventListener("change", () => {
+  seekDrag = false; seekHold = Date.now() + 2500;
   api("video", { cmd: "pct:" + $("seek").value });
-  $("msg").textContent = `${$("seek").value}% の位置へ`;
+  $("msg").textContent = `${$("seekPct").textContent.split(" /")[0]} の位置へ`;
 });
+["pointerup", "pointercancel", "touchend"].forEach((e) => document.addEventListener(e, () => {
+  if (seekDrag) setTimeout(() => { seekDrag = false; }, 300);  // change が来ないまま離したとき
+}, { passive: true }));
+async function syncSeek() {
+  if (document.hidden || seekDrag || Date.now() < seekHold) return;
+  try {
+    const st = await (await fetch("/api/vstate", { headers: { "X-Token": token } })).json();
+    if (seekDrag || Date.now() < seekHold) return;
+    if (!st || !st.d) { vDur = 0; $("seekPct").textContent = st ? fmt(st.t) : "--:--"; return; }  // 動画が無い・ライブ
+    vDur = st.d;
+    $("seek").value = (st.t / st.d * 100).toFixed(1);
+    seekLabel();
+  } catch (e) {}
+}
+setInterval(syncSeek, 1000);
+document.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", () => { seekHold = 0; setTimeout(syncSeek, 600); }));
 
 $("fsBtn").addEventListener("click", () => { api("fullscreen"); $("msg").textContent = "全画面を切り替えました"; });
 
