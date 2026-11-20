@@ -969,7 +969,11 @@ class App:
     def _add_locked(self, url, where, title, play, frame=""):
         video = self._resolve(url, title)
         if frame.startswith(("http://", "https://")) and video.get("browser") and not video.get("live"):
+            # 同じページでも流れていた枠（SD・HD など）が違えば別の 1 本に。枠の URL の ? から後ろ（開くたびに変わる番号）は見ない
+            fu = urlparse(frame)
             video["frame"] = frame
+            video["id"] += ":" + hashlib.sha1(f"{fu.hostname}{fu.path}".encode()).hexdigest()[:6]
+            video["channel"] = f"{video.get('channel', '')}（{fu.hostname}）"
         video["reason"] = video.get("reason") or "自分で足した動画"
         with self.lock:
             self.queue = [v for v in self.queue if v["id"] != video["id"]]
