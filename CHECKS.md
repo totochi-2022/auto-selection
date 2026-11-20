@@ -107,17 +107,21 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 | 消えたページ | https://abema.tv/video/episode/189-37_s1_p1（ほかに 15-1tnnwtcfxhd_s0_p1・19-81_s1_p1） | 404 なので埋め込まずにすぐ飛ばす |
 | 消えた回（アニメのサイト） | https://gogoanime.by/sekai-saikyou-no-majo-hajimemashita-episode-99-english-subbed/（無い回の番号で作れる。KissAnime も同じ） | 200 でトップページへ転送されるので、それを消えたとみなしてすぐ飛ばす |
 | YouTube のメンバー限定 | https://www.youtube.com/watch?v=Pw0wchRQJac | エラー 150 か「始まる前に終わった」で飛ばす |
-| 動画の無いページ | https://example.com/ | 45 秒で飛ばす |
+| 動画の無いページ | https://example.com/ | 自分で押したら 12 秒、自動で次へ進んだときは 25 秒で飛ばす（「動画が見つからない」） |
 | ABEMA の有料（先行配信） | https://abema.tv/video/episode/210-18_s1_p21 | 45 秒で飛ばす（ページの印は free:false・someFree:true） |
 | ABEMA の有料（通常） | https://abema.tv/video/episode/210-18_s1_p5 | 45 秒で飛ばす |
 | （有料の印でも流れるもの） | https://abema.tv/video/episode/536-1_s1_p15 | ページの印は free:false だが、無料の期間で流れる。ページの印だけで有料と決めない理由 |
 
 1. 次に正常なもの（例：gogoanime）を `api/add` で足してから、見本を `"play":true` で流す。
-2. `tvprobe wait-next 100` で次へ進むか。消えたページは数秒、動画の無いページは 45〜50 秒。
+2. `tvprobe wait-next 100` で次へ進むか。消えたページは数秒、動画の無いページは 12〜15 秒（自分で押したとき）。
 3. `tvprobe weblog` に「流せなかったので飛ばします：… 理由」。履歴（`data/history.jsonl`）に `"event": "failed"` と理由。
 4. 正常なものが誤って飛ばされないか：正常なものを 1 分流して、`tvprobe weblog` に飛ばした記録が出ないこと。
 - 仕組み：消えたページは sites.py の `gone`（404・410・451、トップページへの転送）。YouTube はエラーの番号（2・5・100 は消えた、それ以外は落として流し、落とせなければ飛ばす）。
-  始まらないものは、流し始めて 45 秒のうちに「再生が進んだ」知らせ（埋め込みは拡張機能の alive、YouTube とファイルはプレーヤーの位置）が無ければ飛ばす。
+  始まらないもの：埋め込みは拡張機能が中の動画の様子（動画があるか・readyState・読み込んだ秒数・エラー）を 2 秒ごとに知らせ（probe）、
+  autotube が「データが増えていれば待つ、増えない・見つからない・エラーならすぐ飛ばす」。見切る秒数は、自分で押したとき（リストから再生・⏭・
+  足して流す）は データが増えない 12 秒・最長 40 秒、自動で次へ進んだとき（終わった・飛ばした続き）は 25 秒・75 秒（web.py の NO_DATA_LIMIT・START_LIMIT）。
+  「再生が進んだ」知らせ（埋め込みは拡張機能の alive、YouTube とファイルはプレーヤーの位置）が来たら見張りは終わり。
+  理由は `tvprobe weblog` の「見張り：…（自分で押した／自動で次へ、秒、枠の数）」。
 
 ## 2026-11-20 に一通り試した結果
 

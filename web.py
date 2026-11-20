@@ -378,6 +378,8 @@ class App:
         self.radio = None          # {"id", "title"}：その曲を起点にしたラジオ（似た曲）から選ぶモード
         self.picking = False
         self.started_at = None     # 今の動画を流し始めた時刻（始まらないものを飛ばす見張り）
+        self.start_auto = False    # 今の動画は自動で次へ進んで流し始めたか（自分で押したときは早めに見切る）
+        self.probes = {}           # 埋め込みの中の動画の様子（拡張機能から 2 秒ごと。枠ごと）
         self.alive_at = None       # 最後に「再生が進んでいる」と分かった時刻
         self.auto = True           # 自動で足す（流し見）。オフならキューにあるものだけ流して止まる（じっくり見る）
         self.play_on_fill = False  # キューが埋まったらすぐ再生する
@@ -752,6 +754,7 @@ class App:
             self.now = video
             # 落とすものは落とし終わるまで数えない（落とす係が失敗を知らせる）。YouTube の埋め込みは今から
             self.started_at = time.time() if video.get("yt") else None
+            self.probes = {}
             self.play_on_fill = False
             self.player.update(pos=0, dur=video.get("duration") or 0, running=True, paused=False)
             self.status = f"「{video['title'][:40]}」"
@@ -791,6 +794,7 @@ class App:
             with self.lock:
                 self.now = video
                 self.started_at = time.time()
+                self.probes = {}
                 self.play_on_fill = False
                 self.player.update(pos=0, dur=0, paused=False)
                 self.status = f"プレーヤーに埋め込みました：「{video['title'][:40]}」（見終わったら ⏭ 次へ）"
@@ -828,8 +832,6 @@ class App:
 
     # ---- リスト（キュー）の操作：自動で足す・並べ替え・URL から足す・履歴 ----
     # ---- 流せなかったものを飛ばす（消えた・有料になった・埋め込めない・始まらない）----
-    START_LIMIT = 45  # 流し始めてこの秒数たっても一度も再生が進まなければ、流せなかったとして次へ
-
     def _failed(self, video, why):
         """流せなかった：履歴に理由を残して次へ（リストの次が無ければ止まる）"""
         with self.lock:
@@ -846,7 +848,7 @@ class App:
         at.append_history({"event": "failed", "ts": int(time.time()), "id": video["id"], "title": video.get("title"),
                            "url": video.get("url"), "why": why, "request": request})
         self.set_status(f"流せなかったので飛ばしました：「{video.get('title', '')[:30]}」（{why}）")
-        self.next()
+        self.next(auto=True)  # 飛ばした続きは、自動で次へ進んだのと同じ扱い（長めに待つ）
 
     def _media_failed(self, key, why):
         with self.lock:
@@ -854,23 +856,60 @@ class App:
         if v and media_key(v) == key:
             self._failed(v, f"落とせなかった：{why}")
 
+
+    # 始まらないものを見切るまでの秒数。（自分で押したとき, 自動で次へ進んだとき）
+    NO_DATA_LIMIT = (12, 25)   # 埋め込みの中の動画のデータがこれだけ増えなければ飛ばす（動画が見つからない・届かない・止まった）
+    START_LIMIT = (40, 75)     # データが届いていても、これだけたって一度も再生が進まなければ飛ばす
+
+    def probe(self, b):
+        """拡張機能から：埋め込みの中の枠の動画の様子（has・ready・buf＝読み込んだ秒数・err＝動画のエラーの番号）"""
+        now = time.time()
+        with self.lock:
+            key = str(b.get("frame"))
+            p = self.probes.get(key)
+            ready, buf = int(b.get("ready") or 0), float(b.get("buf") or 0)
+            if not p:
+                p = self.probes[key] = {"ready": 0, "buf": 0.0, "grew_at": None}
+            if ready > p["ready"] or buf > p["buf"] + 0.3:
+                p["grew_at"] = now
+            p.update(ready=max(ready, p["ready"]), buf=max(buf, p["buf"]), err=int(b.get("err") or 0),
+                     has=bool(b.get("has")), host=str(b.get("host") or ""), at=now)
+
     def alive(self):
         """拡張機能が「埋め込みの中の動画が進んでいる」と知らせる"""
         self.alive_at = time.time()
 
     def start_watch(self):
-        """流し始めてから START_LIMIT 秒、再生が進んだ知らせ（alive）が来るか見張る"""
+        """流し始めてから再生が進んだ知らせ（alive）が来るか見張る。埋め込みは中の動画の様子（probe）も見て、
+        データが増えていれば待ち、増えない・動画のエラーならすぐ飛ばす。自分で押したときは短く、自動で次へ進んだときは長く待つ"""
         while True:
-            time.sleep(3)
+            time.sleep(2)
             with self.lock:
                 v, t0, ok = self.now, self.started_at, self.alive_at
-                web = self.web
+                web, auto = self.web, self.start_auto
+                probes = [dict(p) for p in self.probes.values() if p.get("at", 0) >= (t0 or 0)]
             if not v or not web or not t0 or (ok and ok >= t0):
                 continue
-            if time.time() - t0 > self.START_LIMIT:
+            now = time.time()
+            el = now - t0
+            nodata, limit = self.NO_DATA_LIMIT[auto], self.START_LIMIT[auto]
+            why = None
+            if v.get("embed") and not v.get("yt"):
+                grew = max([p["grew_at"] for p in probes if p.get("grew_at")] or [0])
+                errs = [p for p in probes if p.get("err")]
+                if errs and now - grew > 6 and el > 4:
+                    why = f"動画のエラー（{errs[0]['host']}、番号 {errs[0]['err']}）"
+                elif el > nodata and now - max(grew, t0) > nodata:
+                    seen = any(p.get("has") for p in probes)
+                    why = (f"{nodata} 秒たっても動画のデータが増えない" if grew else
+                           f"{nodata} 秒たっても動画のデータが届かない" if seen else f"{nodata} 秒たっても動画が見つからない")
+            if not why and el > limit:
+                why = f"{limit} 秒たっても再生が始まらない"
+            if why:
                 with self.lock:
                     self.started_at = None  # 1 本につき 1 回
-                self._failed(v, f"{self.START_LIMIT} 秒たっても再生が始まらない（有料・消えた・埋め込めないなど）")
+                log(f"見張り：{why}（{'自動で次へ' if auto else '自分で押した'}、{round(el)} 秒、枠 {len(probes)} 個）")
+                self._failed(v, why + "（有料・消えた・埋め込めないなど）")
 
     def yt_fail(self, code=0, why=""):
         """YouTube の埋め込みが断られた（埋め込み禁止の動画など）：落として流す今までのやり方に切り替える"""
@@ -1092,7 +1131,7 @@ class App:
         if give_up:
             log("再生が始まらないので次の動画へ進みます")
             self.set_status("再生が始まらなかったので次の動画へ進みました")
-            self.next()
+            self.next(auto=True)
             return
         log(f"再生位置が {STALL_SEC} 秒進まないので読み込み直します（{self.stalls} 回目）")
         try:
@@ -1126,8 +1165,10 @@ class App:
             except RuntimeError as e:
                 self.set_status(str(e))
 
-    def next(self):
+    def next(self, auto=False):
+        """リストの次へ。auto：終わって自動で進んだ・飛ばした続き（始まらないものを長めに待つ）。リモコンの ⏭ は自分で押した扱い"""
         with self.lock:
+            self.start_auto = bool(auto)
             video = self.queue.pop(0) if self.queue else None
             if video is None:
                 self.now = None
@@ -1140,6 +1181,7 @@ class App:
 
     def play_index(self, i):
         with self.lock:
+            self.start_auto = False
             if not 0 <= i < len(self.queue):
                 return
             video = self.queue.pop(i)
@@ -1655,7 +1697,7 @@ class App:
         elif name == "end-file":
             reason = ev.get("reason")
             if reason == "eof":
-                self.next()
+                self.next(auto=True)
             elif reason == "error" and (self.now or {}).get("cast") and (self.now or {}).get("url"):
                 url = self.now["url"]
                 with self.lock:  # mpv では何も再生していないので「再生中」を空にする
@@ -1706,11 +1748,12 @@ def wake_screen():
 
 ACTIONS = {
     "start": lambda b: app.start(b.get("request", ""), b.get("opts") or {}),
-    "next": lambda b: app.next(),
+    "next": lambda b: app.next(bool(b.get("auto"))),
     "play": lambda b: app.play_index(int(b.get("index", -1))),
     "drop": lambda b: app.drop_index(int(b.get("index", -1))),
     "ytfail": lambda b: app.yt_fail(b.get("code", 0), b.get("why", "")),
     "alive": lambda b: app.alive(),
+    "probe": lambda b: app.probe(b),
     "move": lambda b: app.move(int(b.get("from", -1)), int(b.get("to", -1))),
     "clearq": lambda b: app.clear_queue(),
     "auto": lambda b: app.set_auto(bool(b.get("on"))),
