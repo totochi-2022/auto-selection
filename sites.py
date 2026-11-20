@@ -91,7 +91,12 @@ def gone(url):
     if YT_ID.search(url):
         return ""  # YouTube はプレーヤーのエラーの番号で分かる
     try:
-        urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=10).close()
+        r = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=10)
+        final = r.geturl()
+        r.close()
+        # 消えた回のページはトップページへ転送されることが多い（gogoanime・KissAnime は 200 で / へ）
+        if urlparse(url).path.strip("/") and not urlparse(final).path.strip("/"):
+            return "ページが消えている（トップページへ転送された）"
     except urllib.error.HTTPError as e:
         if e.code in (404, 410, 451):
             return f"ページが消えている（{e.code}）"
