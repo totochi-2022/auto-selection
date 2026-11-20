@@ -77,8 +77,10 @@ SITES = [
     {"name": "YouTube", "hosts": ("youtube.com", "youtu.be"), "embed": _youtube},
     {"name": "ABEMA", "hosts": ("abema.tv",), "download": False},  # 見逃しの回は 20 分で 700MB ほど落としていた
     {"name": "gogoanime", "hosts": ("gogoanime",), "download": False, "embed": _gogoanime},
-    # ニコニコ動画：埋め込み用のプレーヤー（_niconico）は「エラーが発生しました」、視聴ページを埋め込むと映るが動画が読み込まれない
-    # （readyState 0。埋め込みの中ではよそのサイトのクッキーが使えないためと思われる）。それまでは yt-dlp で落として流す（コメントは出ない）
+    # ニコニコ動画：未対応。埋め込み用のプレーヤー（_niconico）は「エラーが発生しました」、視聴ページを埋め込むと映るがコメントだけで
+    # 動画が読み込まれない（readyState 0）。Brave のポリシー（tonzura-embed-cookies.json）と盾でクッキーを許しても同じ。
+    # 普通のタブでは両方とも流れるので、埋め込まれていると断られている。リストには入れない（yt-dlp で落とせばコメントなしで流せる）
+    {"name": "ニコニコ動画", "hosts": ("nicovideo.jp", "nico.ms"), "unsupported": True},
     {"name": "KissAnime", "hosts": ("kissanime",), "download": False, "embed": _kissanime},
 ]
 
@@ -86,6 +88,12 @@ SITES = [
 def find(url):
     host = urlparse(url).hostname or ""
     return next((s for s in SITES if any(h in host for h in s["hosts"])), None)
+
+
+def unsupported(url):
+    """リストに入れないサイトなら断る文、入れてよければ空"""
+    s = find(url)
+    return f"{s['name']}は未対応です" if s and s.get("unsupported") else ""
 
 
 def no_download(url):
@@ -128,6 +136,8 @@ if __name__ == "__main__":
     for u in sys.argv[1:]:
         s = find(u)
         print(f"URL     : {u}\nサイト  : {s['name'] if s else '（登録なし：ページごと埋め込む）'}")
+        if unsupported(u):
+            print(f"未対応  : {unsupported(u)}（リストに足せない）")
         print(f"落とすか: {'落とさない（埋め込む）' if no_download(u) else 'yt-dlp で流せれば落とす（YouTube は埋め込み）'}")
         m = page_meta(u)
         print(f"消えたか: {gone(u) or 'ある'}")

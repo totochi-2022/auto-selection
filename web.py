@@ -947,6 +947,9 @@ class App:
         if not url.startswith(("http://", "https://")):
             self.set_status("足す URL が正しくありません")
             return
+        if sites.unsupported(url):
+            self.set_status(f"{sites.unsupported(url)}（リストに足しませんでした）")
+            return
         self.set_status("リストに足す動画を調べています…")
         with self._add_lock:  # 続けて足したとき、調べ終わった順ではなく足した順に並ぶように
             self._add_locked(url, where, title, play)
