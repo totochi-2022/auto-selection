@@ -9,7 +9,23 @@ import sys
 import urllib.request
 from urllib.parse import urljoin, urlparse
 
-UA = "Mozilla/5.0"
+
+
+def _browser_ua():
+    """テレビの Brave と同じ名乗り（User-Agent）。サイトが作る動画の直リンクは、ページを読んだときの名乗りでないと
+    断られることがある（gogoanime の blogger は googlevideo の直リンクが名乗りに縛られ、Brave で開くと 403 だった）。
+    Brave の名乗りは Chrome と同じ形で、版の番号は brave-browser --version の最初の数字（157.1.99.57 なら 157）。
+    Brave が無い PC（Pi）では素っ気ない名乗りのまま"""
+    import subprocess
+    try:
+        v = subprocess.run(["brave-browser", "--version"], capture_output=True, text=True, timeout=10).stdout
+        major = re.search(r"(\d+)\.\d+\.\d+\.\d+", v).group(1)
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        return "Mozilla/5.0"
+    return f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
+
+
+UA = _browser_ua()
 YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)([\w-]{11})")
 
 
