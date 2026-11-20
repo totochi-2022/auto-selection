@@ -785,7 +785,9 @@ class App:
                 with self.lock:
                     self.now = video
                 return self._failed(video, gone)
-            video = {**video, "embed": sites.embed_url(video["url"], log)}
+            if video.get("frame"):  # 右クリックで足したときに流れていた枠（期限切れで始まらなければ _failed が辿り直す）
+                log(f"記録した枠を埋め込みます: {video['frame'][:100]}")
+            video = {**video, "embed": video.get("frame") or sites.embed_url(video["url"], log)}
             with self.lock:
                 self.now = video
                 self.started_at = time.time()
@@ -834,6 +836,12 @@ class App:
             if self.now is not video and (not self.now or self.now.get("id") != video.get("id")):
                 return
             request = self.request
+        if video.get("frame"):  # 記録した枠が期限切れなど：元のページから辿り直してもう一度
+            log(f"記録した枠では流せなかったので、元のページから辿り直します: {why}")
+            self.set_status(f"記録した枠では流せなかったので、元のページから辿り直します")
+            v = {k: x for k, x in video.items() if k not in ("frame", "embed")}
+            threading.Thread(target=self._play_browser, args=(v,), daemon=True).start()
+            return
         log(f"流せなかったので飛ばします: {video.get('title', '')[:40]} {why}")
         at.append_history({"event": "failed", "ts": int(time.time()), "id": video["id"], "title": video.get("title"),
                            "url": video.get("url"), "why": why, "request": request})
@@ -941,8 +949,10 @@ class App:
                 "title": title or (info or {}).get("title") or url, "duration": 0, "channel": host,
                 "thumb": (info or {}).get("thumbnail")}
 
-    def add(self, url, where="end", title="", play=False):
-        """リストに足す（URL を貼る・右クリック・共有・履歴から）。where: next（次に流す）/ end（最後に）。play なら今すぐ流す"""
+    def add(self, url, where="end", title="", play=False, frame=""):
+        """リストに足す（URL を貼る・右クリック・共有・履歴から）。where: next（次に流す）/ end（最後に）。play なら今すぐ流す。
+        frame：右クリックで足したとき、そのタブで実際に動画が流れていた枠（iframe）の URL（拡張機能が見つける）。
+        埋め込むときは sites.py で辿り直さずにこれを使う（SD・HD など選んでいたものがそのまま残る）"""
         url = (url or "").strip()
         if not url.startswith(("http://", "https://")):
             self.set_status("足す URL が正しくありません")
@@ -952,12 +962,14 @@ class App:
             return
         self.set_status("リストに足す動画を調べています…")
         with self._add_lock:  # 続けて足したとき、調べ終わった順ではなく足した順に並ぶように
-            self._add_locked(url, where, title, play)
+            self._add_locked(url, where, title, play, frame)
 
     _add_lock = threading.Lock()
 
-    def _add_locked(self, url, where, title, play):
+    def _add_locked(self, url, where, title, play, frame=""):
         video = self._resolve(url, title)
+        if frame.startswith(("http://", "https://")) and video.get("browser") and not video.get("live"):
+            video["frame"] = frame
         video["reason"] = video.get("reason") or "自分で足した動画"
         with self.lock:
             self.queue = [v for v in self.queue if v["id"] != video["id"]]
@@ -1698,7 +1710,8 @@ ACTIONS = {
     "move": lambda b: app.move(int(b.get("from", -1)), int(b.get("to", -1))),
     "clearq": lambda b: app.clear_queue(),
     "auto": lambda b: app.set_auto(bool(b.get("on"))),
-    "add": lambda b: app.add(str(b.get("url", "")), str(b.get("where", "end")), str(b.get("title", "")), bool(b.get("play"))),
+    "add": lambda b: app.add(str(b.get("url", "")), str(b.get("where", "end")), str(b.get("title", "")), bool(b.get("play")),
+                             str(b.get("frame") or "")),
     "reshuffle": lambda b: app.reshuffle(),
     "stop": lambda b: app.stop(),
     "quit": lambda b: app.quit_player(),
