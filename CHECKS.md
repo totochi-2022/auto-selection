@@ -81,6 +81,7 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 | 種類 | URL | 期待すること |
 |---|---|---|
 | 消えたページ | https://abema.tv/video/episode/189-37_s1_p1（ほかに 15-1tnnwtcfxhd_s0_p1・19-81_s1_p1） | 404 なので埋め込まずにすぐ飛ばす |
+| 消えた回（アニメのサイト） | https://gogoanime.by/sekai-saikyou-no-majo-hajimemashita-episode-99-english-subbed/（無い回の番号で作れる。KissAnime も同じ） | 200 でトップページへ転送されるので、それを消えたとみなしてすぐ飛ばす |
 | YouTube のメンバー限定 | https://www.youtube.com/watch?v=Pw0wchRQJac | エラー 150 か「始まる前に終わった」で飛ばす |
 | 動画の無いページ | https://example.com/ | 45 秒で飛ばす |
 | （有料だったはず） | https://abema.tv/video/episode/536-1_s1_p15 | ページは free:false だが、今は無料の期間で流れる。有料の見本にはならない |
@@ -89,7 +90,7 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 2. `tvprobe wait-next 100` で次へ進むか。消えたページは数秒、動画の無いページは 45〜50 秒。
 3. `tvprobe weblog` に「流せなかったので飛ばします：… 理由」。履歴（`data/history.jsonl`）に `"event": "failed"` と理由。
 4. 正常なものが誤って飛ばされないか：正常なものを 1 分流して、`tvprobe weblog` に飛ばした記録が出ないこと。
-- 仕組み：消えたページは sites.py の `gone`（404・410・451）。YouTube はエラーの番号（2・5・100 は消えた、それ以外は落として流し、落とせなければ飛ばす）。
+- 仕組み：消えたページは sites.py の `gone`（404・410・451、トップページへの転送）。YouTube はエラーの番号（2・5・100 は消えた、それ以外は落として流し、落とせなければ飛ばす）。
   始まらないものは、流し始めて 45 秒のうちに「再生が進んだ」知らせ（埋め込みは拡張機能の alive、YouTube とファイルはプレーヤーの位置）が無ければ飛ばす。
 
 ## 2026-11-20 に一通り試した結果
