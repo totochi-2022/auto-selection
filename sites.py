@@ -46,12 +46,16 @@ def _gogoanime(url):
     """gogoanime：ページの data-src（/player/?…）→ その中の megaplay などの URL"""
     host = urlparse(url).hostname
     ref = f"https://{host}/"
-    m = re.search(r'data-src="(https://[^"]+/player/\?[^"]+)"', _get(url, ref))
-    if not m:
+    players = [html.unescape(p) for p in re.findall(r'data-src="(https://[^"]+/player/\?[^"]+)"', _get(url, ref))]
+    if not players:
         return None
-    player = html.unescape(m.group(1))
-    mi = re.search(r'https://[\w.-]+/(?:embed|e|v|stream)[^"\'<>\s]*', _get(player, ref))
-    return mi.group(0) if mi else player
+    # source=blogger は中が googlevideo の直リンク（取りに行った側の IP に縛られ、テレビでは映らない）なので後回し
+    players.sort(key=lambda p: "source=blogger" in p)
+    for player in players:
+        for mi in re.finditer(r'https://[\w.-]+/(?:embed|e|v|stream)[^"\'<>\s]*', _get(player, ref)):
+            if "googlevideo.com" not in mi.group(0):
+                return mi.group(0)
+    return players[0]  # 中が見つからなければ gogoanime のプレーヤーのページごと
 
 
 def _kissanime(url):
