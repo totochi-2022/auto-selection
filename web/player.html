@@ -84,6 +84,18 @@
   </div>
 </aside>
 <script>
+// 埋め込む前に、拡張機能（tv-fullscreen）に「元のページから開いたように見せる」規則（Referer を元のページに）を入れてもらう。
+// gogoanime の SD のプレーヤーのページは、Referer が gogoanime でないと中身を返さない。拡張機能が無ければ 0.8 秒で諦めてそのまま開く
+function setEmbed(emb, embed, page) {
+  const id = Math.random().toString(36).slice(2);
+  let done = false;
+  const go = () => { if (done) return; done = true; window.removeEventListener("message", ok); if (emb.dataset.src === embed) emb.src = embed; };
+  const ok = (e) => { if (e.source === window && e.data && e.data.tvfs === "referer-ok" && e.data.id === id) go(); };
+  window.addEventListener("message", ok);
+  window.postMessage({ tvfs: "referer", id, embed, page }, "*");
+  setTimeout(go, 800);
+}
+
 const $ = (id) => document.getElementById(id);
 const vid = $("v");
 
@@ -227,7 +239,7 @@ function render() {
     veil.classList.add("hidden");
     if (v.dataset.key) { v.pause(); v.removeAttribute("src"); v.load(); v.dataset.key = ""; }
     v.classList.add("off");
-    if (emb.dataset.src !== s.now.embed) { emb.dataset.src = s.now.embed; emb.src = s.now.embed; }
+    if (emb.dataset.src !== s.now.embed) { emb.dataset.src = s.now.embed; setEmbed(emb, s.now.embed, s.now.url); }
     emb.hidden = false;
     return;
   }
