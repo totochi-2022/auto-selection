@@ -85,6 +85,21 @@ def no_download(url):
     return bool(s) and s.get("download") is False
 
 
+def gone(url):
+    """ページが消えていれば理由（404・410 など）、あれば空。調べられないとき（つながらない・時間切れ）も空（流してみる）"""
+    import urllib.error
+    if YT_ID.search(url):
+        return ""  # YouTube はプレーヤーのエラーの番号で分かる
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=10).close()
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410, 451):
+            return f"ページが消えている（{e.code}）"
+    except (OSError, ValueError):
+        pass
+    return ""
+
+
 def embed_url(url, log=print):
     """プレーヤーに埋め込む URL。中のプレーヤーが取れなければページごと"""
     s = find(url)
@@ -102,4 +117,5 @@ if __name__ == "__main__":
         print(f"URL     : {u}\nサイト  : {s['name'] if s else '（登録なし：ページごと埋め込む）'}")
         print(f"落とすか: {'落とさない（埋め込む）' if no_download(u) else 'yt-dlp で流せれば落とす（YouTube は埋め込み）'}")
         m = page_meta(u)
+        print(f"消えたか: {gone(u) or 'ある'}")
         print(f"題名    : {m.get('title')}\n画像    : {m.get('image')}\n埋め込む: {embed_url(u)}\n")

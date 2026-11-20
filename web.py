@@ -221,8 +221,10 @@ def media_key(video):
 class Media:
     """動画ファイルを先に落としておく係。状態は key -> loading / ready / error"""
 
-    def __init__(self, on_change, keep=()):
+    def __init__(self, on_change, keep=(), on_error=None):
         self.on_change = on_change
+        self.on_error = on_error  # 落とせなかったとき (key, 理由)。今の動画なら次へ飛ばす
+        self.why = {}
         self.lock = threading.Lock()
         self.state = {}
         MEDIA_DIR.mkdir(parents=True, exist_ok=True)
@@ -265,7 +267,11 @@ class Media:
             + ("" if ok else f" {r.stderr.strip()[-300:]}"))
         with self.lock:
             self.state[key] = "ready" if ok else "error"
+            if not ok:
+                self.why[key] = (r.stderr.strip().splitlines() or ["落とせなかった"])[-1][-160:]
         self.on_change()
+        if not ok and self.on_error:
+            self.on_error(key, self.why.get(key, ""))
 
     def keep_only(self, keys):
         """keys 以外のファイルを消す（見終わった動画・キューから外れた動画）"""
@@ -370,6 +376,8 @@ class App:
         self.channel = None        # {"id", "name"}：気に入ったチャンネルからだけ選ぶモード
         self.radio = None          # {"id", "title"}：その曲を起点にしたラジオ（似た曲）から選ぶモード
         self.picking = False
+        self.started_at = None     # 今の動画を流し始めた時刻（始まらないものを飛ばす見張り）
+        self.alive_at = None       # 最後に「再生が進んでいる」と分かった時刻
         self.auto = True           # 自動で足す（流し見）。オフならキューにあるものだけ流して止まる（じっくり見る）
         self.play_on_fill = False  # キューが埋まったらすぐ再生する
         self.status = "希望を入力して「スタート」"
@@ -385,7 +393,7 @@ class App:
         self.ctl = {"id": int(time.time())}
         self._restore()
         keep = {media_key(v) for v in ([self.now] if self.now else []) + self.queue[:1]}
-        self.media = Media(self.changed, keep)
+        self.media = Media(self.changed, keep, on_error=self._media_failed)
         self.dub = Dubber(self.changed)
         threading.Thread(target=self._dub_ahead, daemon=True).start()  # 起動し直す前のキューの分も
         # mpv の起動し直しを同時に 2 つ走らせない（走ると古い mpv が止められずに残り、画面に映り続ける）
@@ -741,6 +749,8 @@ class App:
         """ブラウザで再生するモード：ファイルを落とし始め（済んでいればすぐ）、ページに知らせる。次の 1 本も先に落とす"""
         with self.lock:
             self.now = video
+            # 落とすものは落とし終わるまで数えない（落とす係が失敗を知らせる）。YouTube の埋め込みは今から
+            self.started_at = time.time() if video.get("yt") else None
             self.play_on_fill = False
             self.player.update(pos=0, dur=video.get("duration") or 0, running=True, paused=False)
             self.status = f"「{video['title'][:40]}」"
@@ -769,9 +779,15 @@ class App:
         埋め込む（YouTube は埋め込み用、gogoanime は中のプレーヤーだけ）。mpv のモードならテレビの Brave の新しいタブで開いて全画面。
         終わったら ⏭ 次へ（終わったことの知らせは拡張機能から、これから）"""
         if self.web:
+            gone = sites.gone(video["url"])
+            if gone:  # ページが消えた（404 など）：埋め込まずに飛ばす
+                with self.lock:
+                    self.now = video
+                return self._failed(video, gone)
             video = {**video, "embed": sites.embed_url(video["url"], log)}
             with self.lock:
                 self.now = video
+                self.started_at = time.time()
                 self.play_on_fill = False
                 self.player.update(pos=0, dur=0, paused=False)
                 self.status = f"プレーヤーに埋め込みました：「{video['title'][:40]}」（見終わったら ⏭ 次へ）"
@@ -808,19 +824,65 @@ class App:
             subprocess.run([str(tvfs), "video", "unmute"], env=at.mpv_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # ---- リスト（キュー）の操作：自動で足す・並べ替え・URL から足す・履歴 ----
-    def yt_fail(self, code=0):
+    # ---- 流せなかったものを飛ばす（消えた・有料になった・埋め込めない・始まらない）----
+    START_LIMIT = 45  # 流し始めてこの秒数たっても一度も再生が進まなければ、流せなかったとして次へ
+
+    def _failed(self, video, why):
+        """流せなかった：履歴に理由を残して次へ（リストの次が無ければ止まる）"""
+        with self.lock:
+            if self.now is not video and (not self.now or self.now.get("id") != video.get("id")):
+                return
+            request = self.request
+        log(f"流せなかったので飛ばします: {video.get('title', '')[:40]} {why}")
+        at.append_history({"event": "failed", "ts": int(time.time()), "id": video["id"], "title": video.get("title"),
+                           "url": video.get("url"), "why": why, "request": request})
+        self.set_status(f"流せなかったので飛ばしました：「{video.get('title', '')[:30]}」（{why}）")
+        self.next()
+
+    def _media_failed(self, key, why):
+        with self.lock:
+            v = self.now
+        if v and media_key(v) == key:
+            self._failed(v, f"落とせなかった：{why}")
+
+    def alive(self):
+        """拡張機能が「埋め込みの中の動画が進んでいる」と知らせる"""
+        self.alive_at = time.time()
+
+    def start_watch(self):
+        """流し始めてから START_LIMIT 秒、再生が進んだ知らせ（alive）が来るか見張る"""
+        while True:
+            time.sleep(3)
+            with self.lock:
+                v, t0, ok = self.now, self.started_at, self.alive_at
+                web = self.web
+            if not v or not web or not t0 or (ok and ok >= t0):
+                continue
+            if time.time() - t0 > self.START_LIMIT:
+                with self.lock:
+                    self.started_at = None  # 1 本につき 1 回
+                self._failed(v, f"{self.START_LIMIT} 秒たっても再生が始まらない（有料・消えた・埋め込めないなど）")
+
+    def yt_fail(self, code=0, why=""):
         """YouTube の埋め込みが断られた（埋め込み禁止の動画など）：落として流す今までのやり方に切り替える"""
         with self.lock:
             v = self.now
             if not v or not v.get("yt"):
                 return
-            v = {**v, "yt": None, "ytfail": True}
-            self.now = v
+            if code == "gone" or str(code) in ("2", "5", "100"):  # 見つからない・消えた・非公開・メンバー限定：落としても無駄
+                gone = v
+            else:
+                gone = None
+                v = {**v, "yt": None, "ytfail": True}
+                self.now = v
+        if gone:
+            return self._failed(gone, why or f"YouTube のエラー {code}（消えた・非公開・見つからない）")
+        with self.lock:
             self.status = f"埋め込みで流せない動画でした（{code}）。落としてから流します…"
         if v.get("duration"):
             self.media.fetch(v)
         else:
-            self.set_status("埋め込みで流せないライブでした（⏭ 次へ）")
+            return self._failed(v, f"埋め込めず長さも分からない（メンバー限定・有料・消えた・埋め込み禁止のライブなど、YouTube のエラー {code}）")
         self.changed()
 
     def set_auto(self, on):
@@ -992,6 +1054,8 @@ class App:
         with self.lock:
             if not self.web:
                 return
+            if float(b.get("pos") or 0) > 1 and not b.get("paused"):
+                self.alive_at = time.time()  # プレーヤー（ファイル・YouTube の埋め込み）で再生が進んでいる
             self.player.update(pos=float(b.get("pos") or 0), dur=float(b.get("dur") or 0),
                                paused=bool(b.get("paused")), muted=bool(b.get("muted")),
                                volume=round(float(b.get("volume") or 0) * 100))
@@ -1625,7 +1689,8 @@ ACTIONS = {
     "next": lambda b: app.next(),
     "play": lambda b: app.play_index(int(b.get("index", -1))),
     "drop": lambda b: app.drop_index(int(b.get("index", -1))),
-    "ytfail": lambda b: app.yt_fail(b.get("code", 0)),
+    "ytfail": lambda b: app.yt_fail(b.get("code", 0), b.get("why", "")),
+    "alive": lambda b: app.alive(),
     "move": lambda b: app.move(int(b.get("from", -1)), int(b.get("to", -1))),
     "clearq": lambda b: app.clear_queue(),
     "auto": lambda b: app.set_auto(bool(b.get("on"))),
@@ -1838,6 +1903,7 @@ def main():
         os._exit(0)
     signal.signal(signal.SIGTERM, on_term)
     threading.Thread(target=app.watchdog, daemon=True).start()
+    threading.Thread(target=app.start_watch, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     # HTTPS の入口（phone-input を HTTPS で開いたとき、その中に出すため。HTTPS のページの中に http のページは出せない）。

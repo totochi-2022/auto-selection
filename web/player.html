@@ -357,7 +357,8 @@ on("timeupdate", () => {  // 吹き替えの字幕（今の文）
   $("dsub").textContent = i >= 0 ? dubLines[i].ja : "";
 });
 
-on("ended", () => post("next"));
+// YouTube はメンバー限定・有料の動画で、エラーではなく「すぐ終わった」を返す。始まってすぐの終わりは流せなかったとして知らせる
+on("ended", () => { if (M === yt && yt.currentTime < 5) post("ytfail", { code: "gone", why: "始まる前に終わった（メンバー限定・有料など）" }); else post("next"); });
 // YouTube の埋め込みが断られた（101・150＝埋め込み禁止など）→ 落として流す
 yt.addEventListener("error", (e) => post("ytfail", { code: e.detail }));
 v.addEventListener("error", () => { if (v.dataset.key) $("veil").textContent = "再生できませんでした（⏭ 次へ）"; });
