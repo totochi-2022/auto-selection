@@ -37,7 +37,7 @@ sites.py・sites.js に個別に書く。
 | 8 | 別のタブへ移って戻っても全画面のまま | テレビ | プレーヤーの wantFs（戻ったら web.py が本物の F9 を送る） |
 | 9 | 字幕（焼き込みでないもの）が出ない | テレビ | JW Player なら自動で切れる（決まった操作 setCurrentCaptions(0)）。それ以外は sites.js の `hideSubs` に字幕の CSS。F6＋C で出し入れ |
 | 10 | 案内・ポップアップが邪魔しない | テレビ | sites.js の `dismiss` に閉じるボタンの文字 |
-| 11 | 終わったら次へ進む | 最後の数秒へ飛ばす（`tvfs video pct:99`） | 拡張機能が ended・残り 20 秒以内で 5 秒止まった・埋め込みの中の URL が変わったのを見て autotube の次へ。進まなければ ext.log の「autotube の次へ」を見る |
+| 11 | 終わったら次へ進む（もう 1 本飛ばされない） | 最後の数秒へ飛ばす（`tvfs video pct:99`）。CHECKS.md の 6 | 拡張機能が ended・残り 20 秒以内で 5 秒止まった・埋め込みの中の URL が変わったのを見て autotube の次へ。進まなければ ext.log の「autotube の次へ」を見る |
 
 ## 今の登録
 
