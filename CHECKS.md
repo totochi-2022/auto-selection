@@ -17,6 +17,7 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 | 画面を見る | `tvprobe shot 名前` | PNG の場所が出るので Read で見る |
 | 手前のタブ | `tvprobe tab` | URL と題名 |
 | autotube が何をしたか | `tvprobe weblog` | web.py の記録（`~/.cache/autotube/web.log`）。流せなかった理由など |
+| 埋め込みの中の動画の様子 | `tvfs videos` | 全フレームの動画の大きさ・止まっているか・位置・長さ・readyState（0 のままなら読み込めていない） |
 | 拡張機能が何をしたか | `tvprobe log` | 「JW Player の操作」「autotube の次へ」「字幕を切った」「案内を閉じた」など |
 | 次へ進んだか | `tvprobe wait-next 60` | 今の動画が変わるまで待つ |
 
@@ -103,5 +104,6 @@ Claude がテレビ（tonzura）で自動で確かめるための手順。調べ
 | ABEMA | ○ | ○ | 未 | ○ | ○ | — | ○ |
 | gogoanime | ○ | ○ | 未 | ○ | 未 | ×（焼き込み） | ○ |
 | KissAnime | ○ | ○ | ○ | 未 | 未 | ○ | ○ |
+| ニコニコ動画（落として流す） | ○（落とすのに 5 秒） | ○ | 未 | 未 | 未 | —（コメントは出ない） | 未 |
 
 まだ試していないこと：F6 を押しながらのキー（本物のキーの組み合わせ。`pkey` は修飾キーしか押したままにできない）。中の処理は `tvfs video` と同じ。

@@ -207,7 +207,8 @@ class Mpv:
 # Brave が GPU で再生できる VP9（webm）を優先、だめなら H.264（mp4）。テレビが 1080p なので 1080p まで（AV1 は GPU で再生できないので選ばない）
 MEDIA_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "autotube" / "media"
 WEB_FORMAT = ("bv*[height<=1080][ext=webm][vcodec^=vp]+ba[ext=webm]"
-              "/bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4][height<=1080]/b")
+              "/bv*[height<=1080][ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4][height<=1080]/b"
+              "/bv*[height<=1080]+ba")  # ニコニコ動画は映像と音が別で、音の ext が mp4（m4a ではない）
 
 
 def media_key(video):
