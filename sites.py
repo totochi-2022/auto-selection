@@ -66,11 +66,19 @@ def _kissanime(url):
     return mi.group(0) if mi else player
 
 
+def _niconico(url):
+    """ニコニコ動画：公式の埋め込み用のプレーヤー（embed.nicovideo.jp）"""
+    m = re.search(r"/watch/((?:sm|so|nm)?\d+)", url)
+    return f"https://embed.nicovideo.jp/watch/{m.group(1)}?autoplay=1" if m else None
+
+
 # hosts：ホスト名に含まれる文字。download：False なら yt-dlp で落とせても落とさず埋め込む。embed：中のプレーヤーの取り出し方
 SITES = [
     {"name": "YouTube", "hosts": ("youtube.com", "youtu.be"), "embed": _youtube},
     {"name": "ABEMA", "hosts": ("abema.tv",), "download": False},  # 見逃しの回は 20 分で 700MB ほど落としていた
     {"name": "gogoanime", "hosts": ("gogoanime",), "download": False, "embed": _gogoanime},
+    # ニコニコ動画：埋め込み用のプレーヤー（_niconico）は「エラーが発生しました」、視聴ページを埋め込むと映るが動画が読み込まれない
+    # （readyState 0。埋め込みの中ではよそのサイトのクッキーが使えないためと思われる）。それまでは yt-dlp で落として流す（コメントは出ない）
     {"name": "KissAnime", "hosts": ("kissanime",), "download": False, "embed": _kissanime},
 ]
 
