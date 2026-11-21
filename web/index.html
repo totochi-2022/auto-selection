@@ -546,12 +546,24 @@ $("request").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("form").requestSubmit();
 });
 
+// サーバーの起動し直しなどで切れたら自分でつなぎ直す。EventSource は応答がエラーだとそれきり諦める（CLOSED）ので、
+// そのときは 3 秒後に作り直す。画面に戻ってきたとき・30 秒何も届かないとき（ping は 15 秒ごと）もつなぎ直す
+let es = null, esLast = Date.now();
 function connect() {
-  const es = new EventSource("/events?t=" + encodeURIComponent(token));
-  es.onmessage = (e) => render(JSON.parse(e.data));
-  es.onerror = () => { $("status").textContent = "再接続中…"; };
+  if (es) es.close();
+  es = new EventSource("/events?t=" + encodeURIComponent(token));
+  esLast = Date.now();
+  es.onopen = () => { esLast = Date.now(); };
+  es.onmessage = (e) => { esLast = Date.now(); render(JSON.parse(e.data)); };
+  es.addEventListener("ping", () => { esLast = Date.now(); });
+  es.onerror = () => {
+    $("status").textContent = "再接続中…";
+    if (es.readyState === EventSource.CLOSED) setTimeout(connect, 3000);
+  };
 }
 connect();
+document.addEventListener("visibilitychange", () => { if (!document.hidden && (!es || es.readyState !== EventSource.OPEN)) connect(); });
+setInterval(() => { if (!document.hidden && Date.now() - esLast > 35000) connect(); }, 5000);
 </script>
 </body>
 </html>

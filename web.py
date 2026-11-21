@@ -2082,7 +2082,7 @@ class Handler(BaseHTTPRequestHandler):
                 if changed:
                     msg = "data: " + json.dumps(app.snapshot(), ensure_ascii=False) + "\n\n"
                 else:
-                    msg = ": ping\n\n"
+                    msg = "event: ping\ndata: 1\n\n"  # 画面はこれで「つながっている」と分かる（コメントの行だと JS に届かない）
                 self.wfile.write(msg.encode())
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
