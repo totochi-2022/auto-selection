@@ -66,6 +66,9 @@
   .how .solo input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
   /* ?nohead=1（phone-input の 🎮 操作の中）：見出しの行を出さない（端末・動画は phone-input のマウス・キーボードの帯へ） */
   body.nohead header { display: none; }
+  body.nohead .vol { margin-bottom: 2px; }
+  body.nohead .ctl { padding-bottom: 2px; margin-bottom: 6px; }
+  body.nohead .msg { min-height: 0; margin-top: 0; }  /* 知らせがあるときだけ 1 行（3 秒で消す） */
 </style>
 </head>
 <body>
@@ -114,7 +117,12 @@ const token = new URLSearchParams(location.search).get("t") || "";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 if (token) $("back").href = "/?t=" + encodeURIComponent(token);
 if (window.top !== window) $("back").hidden = true;
-if (new URLSearchParams(location.search).get("nohead") === "1") document.body.classList.add("nohead");  // phone-input の画面の中（iframe）では戻るリンクは要らない（ふだんはそこから開く）
+if (new URLSearchParams(location.search).get("nohead") === "1") {
+  document.body.classList.add("nohead");
+  let mt = null;
+  new MutationObserver(() => { clearTimeout(mt); if ($("msg").textContent) mt = setTimeout(() => { $("msg").textContent = ""; }, 3000); })
+    .observe($("msg"), { childList: true, characterData: true, subtree: true });
+}  // phone-input の画面の中（iframe）では戻るリンクは要らない（ふだんはそこから開く）
 async function api(name, body = {}) {
   try {
     await fetch("/api/" + name, { method: "POST", headers: { "Content-Type": "application/json", "X-Token": token }, body: JSON.stringify(body) });
