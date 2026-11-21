@@ -373,7 +373,7 @@ function dubTick() {
       src.buffer = buf; src.playbackRate.value = M.playbackRate; src.connect(gain);
       if (off < 0) src.start(actx.currentTime - off / M.playbackRate); else src.start(0, off);
       dubSched.set(k, src);
-    }).catch(() => { dubSched.delete(k); });
+    }).catch(() => { dubSched.set(k, "fail"); setTimeout(() => { if (dubSched.get(k) === "fail") dubSched.delete(k); }, 1500); });  // 1.5 秒おいて作り直す
   }
 }
 setInterval(dubTick, 250);
@@ -394,7 +394,10 @@ on("timeupdate", () => {  // 吹き替えの字幕（今の文）
   if (!dubKey) return;
   const now = M.currentTime;
   const i = dubLines.findIndex((L, k) => L.t <= now && now < L.t + Math.min(room(k), Math.max(2.5, L.end - L.t + 1)));
-  $("dsub").textContent = i >= 0 ? dubLines[i].ja : "";
+  // 声がまだ鳴っていない（VOICEVOX を起動し直している・作るのが間に合わない）ときは字幕の頭に印
+  const L = i >= 0 ? dubLines[i] : null, src = L && dubSched.get(`${dubKey}:${L.t}`);
+  const mute = L && !M.paused && now > L.t + 0.6 && !(src && typeof src === "object");
+  $("dsub").textContent = L ? (mute ? "🔇 " : "") + L.ja : "";
 });
 
 // YouTube はメンバー限定・有料の動画で、エラーではなく「すぐ終わった」を返す。始まってすぐの終わりは流せなかったとして知らせる

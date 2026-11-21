@@ -756,34 +756,71 @@ class App:
 
     VOICEVOX_MAX_MB = 800  # 声の種類を使うほど増えて減らない。動画の切り替えでこれを超えていたら起動し直す（1.3 秒で戻る）
 
+    VOICEVOX_HARD_MB = 1200  # 見張り：これを超えたら声を作っている最中でもすぐ起動し直す（メモリを最優先。2026-11-22 ユーザーの希望）
+    VOICEVOX_LOW_AVAIL_MB = 700  # 見張り：PC 全体の空きがこれを切ったら、VOICEVOX が 500MB 以上なら起動し直す
+    vv_restart_at = 0.0  # 最後に起動し直した時刻（/tts が「起動し直し中」と返す・続けて起動し直さないため）
+
+    @staticmethod
+    def _voicevox_rss():
+        """VOICEVOX（ユーザーサービス voicevox）のメモリ（KB）。起動用のものと子（エンジン本体）の合計。動いていなければ 0"""
+        pid = subprocess.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "voicevox"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if not pid or pid == "0":
+            return 0
+        rss = 0
+        for pr in Path("/proc").iterdir():
+            try:
+                st = (pr / "status").read_text()
+            except OSError:
+                continue
+            if pr.name == pid or f"\nPPid:\t{pid}\n" in st:
+                m = re.search(r"VmRSS:\s+(\d+)", st)
+                rss += int(m.group(1)) if m else 0
+        return rss
+
+    @staticmethod
+    def _voicevox_restart(why):
+        App.vv_restart_at = time.time()
+        log(f"VOICEVOX を起動し直します（{why}）")
+        subprocess.run(["systemctl", "--user", "restart", "voicevox"], timeout=30)
+
     @staticmethod
     def _voicevox_trim():
-        """VOICEVOX（ユーザーサービス voicevox）が大きくなっていて、15 秒以上声を作っていなければ起動し直す。
-        2026-11-21 に 1.3GB まで増え、メモリが尽きて Brave が落とされた。読み上げ・吹き替えの最中は避ける"""
+        """動画の切り替えで：VOICEVOX が大きくなっていて、15 秒以上声を作っていなければ起動し直す。
+        2026-11-21 に 1.3GB まで増え、メモリが尽きて Brave が落とされた"""
         try:
-            pid = subprocess.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "voicevox"],
-                                 capture_output=True, text=True, timeout=5).stdout.strip()
-            if not pid or pid == "0":
-                return
-            rss = 0
-            for pr in Path("/proc").iterdir():  # MainPID は起動用のもの。子（エンジン本体）も含めて数える
-                try:
-                    st = (pr / "status").read_text()
-                except OSError:
-                    continue
-                if pr.name == pid or f"\nPPid:\t{pid}\n" in st:
-                    m = re.search(r"VmRSS:\s+(\d+)", st)
-                    rss += int(m.group(1)) if m else 0
+            rss = App._voicevox_rss()
             if rss < App.VOICEVOX_MAX_MB * 1024:
                 return
             last = subprocess.run(["journalctl", "--user", "-u", "voicevox", "-n", "1", "-o", "short-unix", "--no-pager"],
                                   capture_output=True, text=True, timeout=5).stdout.split()
             if last and time.time() - float(last[0]) < 15:
                 return
-            log(f"VOICEVOX が {rss // 1024}MB になっていたので起動し直します")
-            subprocess.run(["systemctl", "--user", "restart", "voicevox"], timeout=30)
+            App._voicevox_restart(f"動画の切り替えで {rss // 1024}MB")
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             log(f"VOICEVOX の見直しに失敗: {e}")
+
+    @staticmethod
+    def voicevox_watch():
+        """メモリの見張り（裏で 5 秒ごと）。VOICEVOX は声を作るほどメモリが増えて減らない（1 時間で 3GB 近く）。
+        声を作っている最中でも、大きくなったら・PC 全体の空きが少なければすぐ起動し直す（声が途切れてもよい）"""
+        while True:
+            time.sleep(5)
+            try:
+                if time.time() - App.vv_restart_at < 30:
+                    continue
+                rss = App._voicevox_rss() // 1024
+                if not rss:
+                    continue
+                avail = 0
+                m = re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text())
+                avail = int(m.group(1)) // 1024 if m else 99999
+                if rss > App.VOICEVOX_HARD_MB:
+                    App._voicevox_restart(f"見張り：{rss}MB")
+                elif avail < App.VOICEVOX_LOW_AVAIL_MB and rss > 500:
+                    App._voicevox_restart(f"見張り：PC の空きが {avail}MB、VOICEVOX {rss}MB")
+            except Exception as e:
+                log(f"VOICEVOX の見張りに失敗: {e}")
 
     def _play_web(self, video):
         """ブラウザで再生するモード：ファイルを落とし始め（済んでいればすぐ）、ページに知らせる。次の 1 本も先に落とす"""
@@ -1934,7 +1971,8 @@ class Handler(BaseHTTPRequestHandler):
                     w.setnchannels(1); w.setsampwidth(2); w.setframerate(dubmod.RATE); w.writeframes(pcm.tobytes())
                 self._send(200, buf.getvalue(), "audio/wav")
             except Exception as e:
-                self._send(500, json.dumps({"error": str(e)}))
+                # 起動し直した直後（VOICEVOX が戻るまで）は 503。プレーヤーは「声を準備中」の印を出して作り直す
+                self._send(503 if time.time() - App.vv_restart_at < 20 else 500, json.dumps({"error": str(e)}))
         elif path == "/api/pcclip":  # テレビの PC のクリップボード（PC でコピーした URL をリモコンで貼る）
             self._send(200, json.dumps({"text": app.pc_clip()}, ensure_ascii=False))
         elif path == "/api/curtab":  # テレビの Brave の手前のタブ（今のタブをリストに足す）
@@ -2054,6 +2092,7 @@ def main():
     signal.signal(signal.SIGTERM, on_term)
     threading.Thread(target=app.watchdog, daemon=True).start()
     threading.Thread(target=app.start_watch, daemon=True).start()
+    threading.Thread(target=App.voicevox_watch, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     # HTTPS の入口（phone-input を HTTPS で開いたとき、その中に出すため。HTTPS のページの中に http のページは出せない）。
