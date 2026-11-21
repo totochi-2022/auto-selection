@@ -54,7 +54,8 @@
   .vol button { flex: 0 0 52px; }
   .vol input { flex: 1; min-width: 0; accent-color: var(--accent); height: 32px; }
   .vol span { flex: 0 0 auto; min-width: 3em; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .how { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+  .how { display: none !important; }
+  .how.x { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   .seg label { cursor: pointer; }
   .seg input { position: absolute; opacity: 0; pointer-events: none; }
@@ -123,8 +124,8 @@ async function api(name, body = {}) {
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
                 set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
 const savedHow = store.get("bmHow");
-if (savedHow) document.querySelectorAll('input[name="how"]').forEach((r) => { r.checked = r.value === savedHow; });
-if (store.get("bmSolo") !== null) $("solo").checked = store.get("bmSolo") === "1";
+// 開き方は「同じサイト」・「ほかの動画を止める」オンで固定（ユーザーの希望、2026-11-21）。選ぶ行は隠した（.how）。
+// 戻すときはこの 2 行を消して .how の display:none を外す
 document.querySelectorAll('input[name="how"]').forEach((r) => r.addEventListener("change", () => store.set("bmHow", r.value)));
 $("solo").addEventListener("change", () => store.set("bmSolo", $("solo").checked ? "1" : "0"));
 
