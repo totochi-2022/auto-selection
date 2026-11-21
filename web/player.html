@@ -339,7 +339,9 @@ function synth(i) {
   return dubCache.get(k);
 }
 function dubTick() {
-  if (!dubKey || !dubLines.length || M.paused || M.seeking || !actx) return;
+  if (!dubKey || !dubLines.length || M.paused || M.seeking) return;
+  // 音を鳴らす準備は再生・シークのときに作っていたが、流し始めたあとで吹き替えが「途中まで」になると作られず、ずっと黙っていた（2026-11-21）
+  if (!actx) audio();
   const now = M.currentTime, key = dubKey;
   for (let i = 0; i < dubLines.length; i++) {
     const L = dubLines[i];
