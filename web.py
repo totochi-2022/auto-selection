@@ -754,8 +754,40 @@ class App:
         self.changed()
         self.refill()
 
+    VOICEVOX_MAX_MB = 800  # 声の種類を使うほど増えて減らない。動画の切り替えでこれを超えていたら起動し直す（1.3 秒で戻る）
+
+    @staticmethod
+    def _voicevox_trim():
+        """VOICEVOX（ユーザーサービス voicevox）が大きくなっていて、15 秒以上声を作っていなければ起動し直す。
+        2026-11-21 に 1.3GB まで増え、メモリが尽きて Brave が落とされた。読み上げ・吹き替えの最中は避ける"""
+        try:
+            pid = subprocess.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "voicevox"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+            if not pid or pid == "0":
+                return
+            rss = 0
+            for pr in Path("/proc").iterdir():  # MainPID は起動用のもの。子（エンジン本体）も含めて数える
+                try:
+                    st = (pr / "status").read_text()
+                except OSError:
+                    continue
+                if pr.name == pid or f"\nPPid:\t{pid}\n" in st:
+                    m = re.search(r"VmRSS:\s+(\d+)", st)
+                    rss += int(m.group(1)) if m else 0
+            if rss < App.VOICEVOX_MAX_MB * 1024:
+                return
+            last = subprocess.run(["journalctl", "--user", "-u", "voicevox", "-n", "1", "-o", "short-unix", "--no-pager"],
+                                  capture_output=True, text=True, timeout=5).stdout.split()
+            if last and time.time() - float(last[0]) < 15:
+                return
+            log(f"VOICEVOX が {rss // 1024}MB になっていたので起動し直します")
+            subprocess.run(["systemctl", "--user", "restart", "voicevox"], timeout=30)
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            log(f"VOICEVOX の見直しに失敗: {e}")
+
     def _play_web(self, video):
         """ブラウザで再生するモード：ファイルを落とし始め（済んでいればすぐ）、ページに知らせる。次の 1 本も先に落とす"""
+        threading.Thread(target=self._voicevox_trim, daemon=True).start()
         with self.lock:
             self.now = video
             # 落とすものは落とし終わるまで数えない（落とす係が失敗を知らせる）。YouTube の埋め込みは今から
