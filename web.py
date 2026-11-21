@@ -299,6 +299,7 @@ class Dubber:
         self.state, self.progress, self.todo = {}, {}, []
         self.covered = {}  # 途中までの台本が何秒まで訳せたか（シークバーに出す）
         self._last = 0
+        self.on_none = None  # 吹き替えられない（日本語でもない）と分かったときに呼ぶ：on_none(vid)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def want(self, video):
@@ -334,6 +335,8 @@ class Dubber:
                 lang = dubmod.orig_lang(vid)  # 動画の情報か、元の言語の自動字幕から
                 if lang is None or lang.split("-")[0] == "ja":  # 日本語（分からないものも）は吹き替えない
                     self._set(vid, "none")
+                    if lang is None and self.on_none:  # 言語が分からない＝字幕も情報も無い
+                        self.on_none(vid)
                     continue
                 log(f"吹き替えを作ります: {vid}（{lang}）")
 
@@ -351,6 +354,8 @@ class Dubber:
             except RuntimeError as e:  # 字幕が無いなど
                 log(f"吹き替えなし: {vid} {e}")
                 self._set(vid, "none")
+                if self.on_none:
+                    self.on_none(vid)
             except Exception as e:
                 log(f"吹き替えに失敗: {vid} {e!r}")
                 self._set(vid, "error")
@@ -398,6 +403,7 @@ class App:
         keep = {media_key(v) for v in ([self.now] if self.now else []) + self.queue[:1]}
         self.media = Media(self.changed, keep, on_error=self._media_failed)
         self.dub = Dubber(self.changed)
+        self.dub.on_none = self._dub_none
         threading.Thread(target=self._dub_ahead, daemon=True).start()  # 起動し直す前のキューの分も
         # mpv の起動し直しを同時に 2 つ走らせない（走ると古い mpv が止められずに残り、画面に映り続ける）
         self.load_lock = threading.Lock()
@@ -1186,6 +1192,19 @@ class App:
                 return
             video = self.queue.pop(i)
         self.play(video)
+
+    def _dub_none(self, vid):
+        """「英語も（吹き替え）」のとき、吹き替えられない動画（字幕が無いなど）をリストから外す。題名に日本語があるものは残す
+        （日本語の動画は言語の情報が無くても見られる）。今流れているものはそのまま"""
+        if not self.opts.get("en"):
+            return
+        with self.lock:
+            i = next((k for k, q in enumerate(self.queue) if q.get("id") == vid), -1)
+            if i < 0 or re.search(r"[\u3040-\u30ff\u4e00-\u9fff]", self.queue[i].get("title") or ""):
+                return
+            title = self.queue[i].get("title") or vid
+        log(f"吹き替えられないのでリストから外します: {title}")
+        self.drop_index(i)
 
     def drop_index(self, i):
         with self.lock:
