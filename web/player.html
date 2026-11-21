@@ -361,6 +361,16 @@ function dubTick() {
   }
 }
 setInterval(dubTick, 250);
+// 作った声（音のデータ）は 1 文で数百 KB。1 時間の動画で全部ため込むと 1GB を超え、メモリが足りずに Brave が落とされた（2026-11-21）。
+// 今の位置より 30 秒以上前の文と、2 分以上先の文の声は捨てる（戻ったらまた作る）
+setInterval(() => {
+  if (!dubKey) return;
+  const now = M.currentTime;
+  for (const k of [...dubCache.keys()]) {
+    const t = Number(k.slice(k.lastIndexOf(":") + 1));
+    if (!k.startsWith(dubKey + ":") || t < now - 30 || t > now + 120) { dubCache.delete(k); dubSched.delete(k); }
+  }
+}, 10000);
 for (const ev of ["seeking", "pause", "ratechange", "emptied"]) on(ev, dubStop);
 for (const ev of ["seeked", "play", "ratechange"]) on(ev, () => { if (dubKey) audio(); setTimeout(dubTick, 0); });
 on("volumechange", applyVol);
