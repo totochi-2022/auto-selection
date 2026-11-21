@@ -101,6 +101,9 @@ SITES = [
     # 動画が読み込まれない（readyState 0）。Brave のポリシー（tonzura-embed-cookies.json）と盾でクッキーを許しても同じ。
     # 普通のタブでは両方とも流れるので、埋め込まれていると断られている。リストには入れない（yt-dlp で落とせばコメントなしで流せる）
     {"name": "ニコニコ動画", "hosts": ("nicovideo.jp", "nico.ms"), "unsupported": True},
+    # Prime Video：未対応。埋め込むとログインが引き継がれず（ページはログインしていない扱い）、裏で流れる予告（2 分ほど）しか映らない。
+    # 本編は DRM で、埋め込みの中ではまず流れない。予告が流れるので見張りでは飛ばず、2 分ほど挟まっていた（2026-11-21）
+    {"name": "Prime Video", "hosts": ("primevideo.com", "amazon.co.jp", "amazon.com"), "unsupported": True},
     {"name": "KissAnime", "hosts": ("kissanime",), "download": False, "embed": _kissanime},
 ]
 
