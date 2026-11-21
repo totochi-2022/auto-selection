@@ -1850,6 +1850,7 @@ ACTIONS = {
     "cast": lambda b: app.cast(b.get("url", ""), b.get("t", 0)),
     "web": lambda b: app.set_web(bool(b.get("on"))),
     "webpos": lambda b: app.web_pos(b),
+    "log": lambda b: log("プレーヤー: " + str(b.get("msg", ""))[:200]),  # プレーヤーのページからの記録
 }
 
 CAST_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">

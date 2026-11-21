@@ -142,6 +142,14 @@ class YTMedia extends EventTarget {
     if (!this.p || !this.p.getCurrentTime || !this.id) return;
     const t = this.p.getCurrentTime(), exp = this._t + (this._paused ? 0 : 0.25 * this.playbackRate);
     const jumped = Math.abs(t - exp) > 1.5;
+    // 再生中のはずなのに位置が 25 秒動かない：YouTube の枠が落ちた（メモリ不足で youtube.com の処理が殺されると、枠は泣き顔のまま
+    // 何も返さなくなる。2026-11-21）。ページを読み直す（1 本目は web.py が覚えている位置から続ける）
+    if (this._paused || t !== this._t || t < 5) this._still = Date.now();  // 頭（広告の間は位置が 0 のまま）は見ない
+    else if (this._still && Date.now() - this._still > 25000 && !document.hidden) {
+      this._still = 0;
+      post("log", { msg: "YouTube の枠が 25 秒動かないので、プレーヤーを読み直します" });
+      setTimeout(() => location.reload(), 300);
+    }
     this._t = t;
     if (jumped) { this._ev("seeking"); this._ev("seeked"); }
     this._ev("timeupdate");
