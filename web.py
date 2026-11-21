@@ -1911,6 +1911,14 @@ CAST_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" conten
 
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        # HTTPS なら、このスレッドでハンドシェイク（20 秒で諦める）。受け口のスレッドを止めないため
+        if hasattr(self.request, "do_handshake"):
+            self.request.settimeout(20)
+            self.request.do_handshake()
+            self.request.settimeout(None)
+        super().setup()
+
     def log_message(self, fmt, *args):
         pass
 
@@ -2104,7 +2112,9 @@ def main():
         ctx.load_cert_chain(tls / "cert.pem", tls / "key.pem")
         https = ThreadingHTTPServer((HOST, int(os.environ.get("AUTOTUBE_HTTPS_PORT", "8776"))), Handler)
         https.daemon_threads = True
-        https.socket = ctx.wrap_socket(https.socket, server_side=True)
+        # 手続き（TLS のハンドシェイク）は受け付けた後のスレッドで（下の Handler.setup）。受け口でやると、つなぎかけで
+        # 止まったスマホが 1 台いるだけで、ほかの全部の HTTPS が待たされて「すぐ切れる・操作できない」になっていた（2026-11-22）
+        https.socket = ctx.wrap_socket(https.socket, server_side=True, do_handshake_on_connect=False)
         threading.Thread(target=https.serve_forever, daemon=True).start()
     log(f"http://localhost:{PORT}/" + (f"?t={TOKEN}" if REQUIRE_TOKEN else "") + " で待っています（Ctrl+C で終了）")
     try:
