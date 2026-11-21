@@ -13,6 +13,7 @@ import argparse
 import array
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -358,7 +359,42 @@ def cast_voices(script):
     return voices
 
 
+TTS_CHUNK = 40  # VOICEVOX に一度に送る長さ（文字）
+
+
+def split_for_tts(text, n=TTS_CHUNK):
+    """長い文を「。！？」→「、」→ n 文字で区切る。VOICEVOX（中の ONNX Runtime）はそれまでで一番長い文のぶんのメモリを
+    手放さず（76 文字で 376MB、653 文字で 3.9GB。voicevox_engine #1506・#1691）、吹き替えで 1 分半に 1.4GB 増えていた"""
+    parts = []
+    for sent in re.findall(r"[^。！？!?]+[。！？!?」』）)]*", text) or [text]:
+        while len(sent) > n:
+            cut = max(sent.rfind(c, 0, n + 1) for c in "、，,　 ")
+            cut = cut + 1 if cut >= n // 3 else n
+            parts.append(sent[:cut]); sent = sent[cut:]
+        if sent.strip():
+            parts.append(sent)
+    # 短すぎる切れ端は前とつなぐ（区切りが多いと間が空きすぎる）
+    out = []
+    for p in parts:
+        if out and (len(p.strip()) < 6 or len(out[-1]) + len(p) <= n // 2):
+            out[-1] += p
+        else:
+            out.append(p)
+    return [p for p in out if p.strip()] or [text]
+
+
 def tts(text, speaker, speed, pitch=0.0):
+    """文を声に。長い文は短く切って作り、つなげて返す（VOICEVOX のメモリを抑えるため）"""
+    parts = split_for_tts(text)
+    if len(parts) == 1:
+        return tts_one(parts[0], speaker, speed, pitch)
+    pcm = array.array("h")
+    for p in parts:
+        pcm.extend(tts_one(p, speaker, speed, pitch))
+    return pcm
+
+
+def tts_one(text, speaker, speed, pitch=0.0):
     q = json.loads(urllib.request.urlopen(urllib.request.Request(
         f"{VOICEVOX}/audio_query?speaker={speaker}&text={quote(text)}", method="POST"), timeout=60).read())
     q["speedScale"] = speed
