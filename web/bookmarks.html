@@ -64,6 +64,8 @@
   .seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
   .how .solo { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
   .how .solo input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+  /* ?nohead=1（phone-input の 🎮 操作の中）：見出しの行を出さない（端末・動画は phone-input のマウス・キーボードの帯へ） */
+  body.nohead header { display: none; }
 </style>
 </head>
 <body>
@@ -111,7 +113,8 @@ const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.search).get("t") || "";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 if (token) $("back").href = "/?t=" + encodeURIComponent(token);
-if (window.top !== window) $("back").hidden = true;  // phone-input の画面の中（iframe）では戻るリンクは要らない（ふだんはそこから開く）
+if (window.top !== window) $("back").hidden = true;
+if (new URLSearchParams(location.search).get("nohead") === "1") document.body.classList.add("nohead");  // phone-input の画面の中（iframe）では戻るリンクは要らない（ふだんはそこから開く）
 async function api(name, body = {}) {
   try {
     await fetch("/api/" + name, { method: "POST", headers: { "Content-Type": "application/json", "X-Token": token }, body: JSON.stringify(body) });
