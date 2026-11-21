@@ -1442,13 +1442,27 @@ class App:
             subprocess.Popen(["brave-browser", url], env=env, start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
-        subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def cur():
+            try:
+                return json.loads(subprocess.run([str(tvfs), "current"], env=env, capture_output=True, text=True, timeout=3).stdout or "null")
+            except Exception:
+                return None
+        before = (cur() or {}).get("url", "?")[:80]
         if not tvfs.exists() or subprocess.run([str(tvfs), "open", url, how], env=env,
                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
             subprocess.Popen(["brave-browser", url], env=env, start_new_session=True,  # 中継が使えなければ新しいタブで
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
+        # 行き先のタブの窓を前に出す。Brave の窓が 2 つあるとき、前は先に app_id で「最初の窓」を前に出していて、
+        # 別の窓のタブへ移っても一瞬で最初の窓に戻っていた（拡張機能の windows.update は labwc では前に出ない）
+        after = cur() or {}
+        if after.get("title"):
+            subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser", f"title:{after['title']} - Brave"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["wlrctl", "toplevel", "focus", "app_id:brave-browser"], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        log(f"ブックマーク: {how} {url[:60]}（{before} → {after.get('url', '?')[:80]}）")
         solo_here = self.WIN_FOCUS.with_name("solo-here")
         if solo and solo_here.exists():  # F7 と同じく、行き先以外の動画を一時停止・行き先で止めていたものは再開
             subprocess.run([str(solo_here)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
