@@ -100,14 +100,22 @@ const $ = (id) => document.getElementById(id);
 const vid = $("v");
 
 // YouTube の埋め込みのプレーヤーを <video> と同じ形で扱う（吹き替え・位置・操作は M＝今の動画 だけを見る）
+// ページを読み直した（拡張機能の読み直し・Brave が落ちて開き直した など）直後の 1 本目だけ、web.py が覚えている位置から続ける
+let resumeOnce = true;
+function resumeAt(s) {
+  if (!resumeOnce) return 0;
+  resumeOnce = false;
+  const p = s.player || {};
+  return p.pos > 5 && (!p.dur || p.pos < p.dur - 15) ? p.pos : 0;
+}
 class YTMedia extends EventTarget {
   constructor() { super(); this.p = null; this.ready = null; this.id = ""; this._t = 0; this._paused = true; this._vol = 1; this._muted = false; }
-  load(id) {
-    this.id = id; this._t = 0; this._paused = true;
+  load(id, start = 0) {
+    this.id = id; this._t = start; this._paused = true;
     if (!this.ready) {
       this.ready = new Promise((res) => {
         window.onYouTubeIframeAPIReady = () => {
-          this.p = new YT.Player("ytp", { videoId: id, playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3 },
+          this.p = new YT.Player("ytp", { videoId: id, playerVars: { autoplay: 1, start: Math.floor(start), playsinline: 1, rel: 0, modestbranding: 1, cc_load_policy: 0, iv_load_policy: 3 },
             events: { onReady: () => { this.p.setVolume(this._vol * 100); res(); },
                       onStateChange: (e) => this._state(e.data),
                       onPlaybackRateChange: () => this._ev("ratechange"),
@@ -115,7 +123,7 @@ class YTMedia extends EventTarget {
         };
         const sc = document.createElement("script"); sc.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(sc);
       });
-    } else this.ready.then(() => this.p.loadVideoById(id));
+    } else this.ready.then(() => this.p.loadVideoById({ videoId: id, startSeconds: start }));
     if (!this._poll) this._poll = setInterval(() => this._tick(), 250);
   }
   stop() { this.id = ""; if (this.p && this.p.stopVideo) this.p.stopVideo(); }
@@ -226,7 +234,7 @@ function render() {
     if ($("emb").dataset.src) { $("emb").removeAttribute("src"); $("emb").dataset.src = ""; $("emb").hidden = true; }
     $("ytbox").hidden = false;
     M = yt;
-    if (yt.id !== s.now.yt) { dubStop(); yt.load(s.now.yt); }
+    if (yt.id !== s.now.yt) { dubStop(); yt.load(s.now.yt, resumeAt(s)); }
     setDub(s.now.id, ds ? ds.st : "");
     dubCovered = ds && ds.st === "ready" ? Infinity : ds && ds.st === "partial" ? (ds.covered || 0) : 0;
     return;
