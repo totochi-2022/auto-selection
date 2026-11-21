@@ -1190,7 +1190,9 @@ class App:
                 return
             if float(b.get("pos") or 0) > 1 and not b.get("paused"):
                 self.alive_at = time.time()  # プレーヤー（ファイル・YouTube の埋め込み）で再生が進んでいる
-            self.player.update(pos=float(b.get("pos") or 0), dur=float(b.get("dur") or 0),
+            # running も立てる：web.py を起動し直すと running が False のまま戻り、リモコンの操作のボタンが
+            # 次の動画まで全部押せなくなっていた（2026-11-22）。ページから位置が届く＝プレーヤーが動いている
+            self.player.update(pos=float(b.get("pos") or 0), dur=float(b.get("dur") or 0), running=True,
                                paused=bool(b.get("paused")), muted=bool(b.get("muted")),
                                volume=round(float(b.get("volume") or 0) * 100))
         self.changed()
