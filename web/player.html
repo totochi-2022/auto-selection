@@ -304,7 +304,7 @@ setInterval(() => {
   $("pbDub").style.width = d && dubKey ? Math.min(100, dubCovered / d * 100) + "%" : "0";
 }, 500);
 let dubKey = "", dubLines = [], dubPartial = false, dubFetchAt = 0, baseVol = 1, actx = null, gain = null;
-const dubCache = new Map(), dubSched = new Map();
+const dubCache = new Map(), dubSched = new Map(), dubDone = new Set();  // dubDone：声ができあがった文
 function applyVol() {
   M.volume = baseVol * (dubKey && dubLines.length ? DUB_ORIG : 1);
   if (gain) gain.gain.value = M.muted ? 0 : baseVol;
@@ -323,9 +323,13 @@ async function loadScript() {
   } catch (e) {}
 }
 function dubStop() { for (const x of dubSched.values()) { try { x && x.stop(); } catch (e) {} } dubSched.clear(); }
+let dubSt = "";  // 吹き替えの状態（working＝訳している・partial・ready・none）。準備中の印に使う
 function setDub(key, st) {
+  dubSt = st || "";
+  if (st === "working" && !dubKey) $("dsub").textContent = "🔇 吹き替えを準備中（訳しています）";
+  else if (!st && !dubKey) $("dsub").textContent = "";
   const on = st === "ready" || st === "partial";
-  if (on && dubKey !== key) { dubStop(); dubCache.clear(); dubKey = key; dubLines = []; loadScript(); }
+  if (on && dubKey !== key) { dubStop(); dubCache.clear(); dubDone.clear(); dubKey = key; dubLines = []; loadScript(); }
   else if (!on && dubKey) { dubStop(); dubCache.clear(); dubKey = ""; dubLines = []; $("dsub").textContent = ""; }
   if (on && dubPartial && st === "ready") loadScript();  // 途中から全部できた
   dubPartial = st === "partial";
@@ -350,7 +354,7 @@ function synth(i) {
       }
       return buf;
     })());
-    dubCache.get(k).catch(() => dubCache.delete(k));
+    dubCache.get(k).then(() => dubDone.add(k), () => dubCache.delete(k));
   }
   return dubCache.get(k);
 }
@@ -397,7 +401,17 @@ on("timeupdate", () => {  // 吹き替えの字幕（今の文）
   // 声がまだ鳴っていない（VOICEVOX を起動し直している・作るのが間に合わない）ときは字幕の頭に印
   const L = i >= 0 ? dubLines[i] : null, src = L && dubSched.get(`${dubKey}:${L.t}`);
   const mute = L && !M.paused && now > L.t + 0.6 && !(src && typeof src === "object");
-  $("dsub").textContent = L ? (mute ? "🔇 " : "") + L.ja : "";
+  if (L) { $("dsub").textContent = (mute ? "🔇 " : "") + L.ja; return; }
+  // 文の無いところ：吹き替えがまだ流せないなら準備中と出す（流し始める前・訳し終わったところより先・次の文の声がまだ）
+  let prep = "";
+  if (!dubLines.length) prep = "🔇 吹き替えを準備中";
+  else if (dubPartial && now >= dubCovered) prep = "🔇 吹き替えを準備中（この先を訳しています）";
+  else {
+    const j = dubLines.findIndex((x) => x.t > now);
+    const nx = j >= 0 ? dubLines[j] : null, ns = nx && dubSched.get(`${dubKey}:${nx.t}`);
+    if (nx && nx.t - now < 4 && !(ns && typeof ns === "object") && !dubDone.has(`${dubKey}:${nx.t}`)) prep = "🔇 声を準備中";
+  }
+  $("dsub").textContent = prep;
 });
 
 // YouTube はメンバー限定・有料の動画で、エラーではなく「すぐ終わった」を返す。始まってすぐの終わりは流せなかったとして知らせる
