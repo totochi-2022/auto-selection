@@ -21,13 +21,16 @@
   body { margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; -webkit-tap-highlight-color: transparent; }
   main { max-width: 720px; margin: 0 auto; padding: 12px 16px 32px; }
+  /* タブ・動画の操作・シークバー・開き方は上に固定し、ブックマークの一覧だけスクロールする */
+  .ctl { position: sticky; top: 0; z-index: 5; background: var(--bg); margin: -12px -16px 8px; padding: 12px 16px 6px;
+    border-bottom: 1px solid var(--line); }
   header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
   h1 { font-size: 20px; margin: 0; }
   header .jump { margin-left: auto; display: flex; gap: 6px; }
   header .jump button { padding: 2px 12px; line-height: 1.5; font: inherit; font-size: 14px; border-radius: 8px;
     border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; }
   header a { color: var(--accent); text-decoration: none; }
-  .msg { color: var(--muted); font-size: 13px; min-height: 1.5em; margin-top: 8px; }
+  .msg { color: var(--muted); font-size: 12px; min-height: 1.4em; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* ブックマーク（テレビの Brave のブックマークバー） */
   .bm { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
   .bm button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 10px; min-height: 48px;
@@ -64,6 +67,7 @@
 </head>
 <body>
 <main>
+  <div class="ctl">
   <header><a id="back" href="/">← autotube</a><h1>🔖 ブックマーク</h1>
     <span class="jump"><button data-jump="term" title="テレビを端末（ttyd のタブ）に。F7＋T と同じ">端末</button><button data-jump="video" title="テレビを動画（mpv かプレーヤーのタブ）に。F7＋M と同じ">動画</button></span></header>
   <div class="tabs">
@@ -95,10 +99,11 @@
     </span>
     <label class="solo"><input type="checkbox" id="solo" checked> ほかの動画を止める</label>
   </div>
+  <div class="msg" id="msg"></div>
+  </div><!-- /ctl：上に固定（ブックマークの一覧だけスクロール） -->
   <section id="bmSec">
     <div id="bm" class="bm"></div>
   </section>
-  <div class="msg" id="msg"></div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
