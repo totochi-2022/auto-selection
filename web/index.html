@@ -565,5 +565,17 @@ connect();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && (!es || es.readyState !== EventSource.OPEN)) connect(); });
 setInterval(() => { if (!document.hidden && Date.now() - esLast > 35000) connect(); }, 5000);
 </script>
+<script>
+// phone-input の 🎮 操作・▶ autotube の枠の中で開かれたとき：スマホの傾きの知らせを親（phone-input）へ渡す。
+// Chrome は触った枠にしか知らせを渡さないので、これが無いと枠に触ったあと振っても画面が移らない
+if (window.parent !== window) window.addEventListener("devicemotion", (e) => {
+  if (!document.hasFocus()) return;
+  const v = (o, k) => o ? { x: o[k[0]], y: o[k[1]], z: o[k[2]] } : null;
+  const r = e.rotationRate;
+  parent.postMessage({ pimotion: {
+    ig: v(e.accelerationIncludingGravity, "xyz"), a: v(e.acceleration, "xyz"),
+    r: r ? { alpha: r.alpha, beta: r.beta, gamma: r.gamma } : null } }, "*");
+});
+</script>
 </body>
 </html>
