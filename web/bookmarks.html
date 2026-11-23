@@ -177,7 +177,8 @@ async function syncSeek() {
   try {
     const st = await (await fetch("/api/vstate", { headers: { "X-Token": token } })).json();
     if (seekDrag || Date.now() < seekHold) return;
-    if (!st || !st.d) { vDur = 0; $("seekPct").textContent = st ? fmt(st.t) : "--:--"; return; }  // 動画が無い・ライブ
+    // 動画が無い・ライブ（長さ 0）。ABEMA の放送中のチャンネルは位置が 1970 年からの秒（放送の時刻）で来るので時刻で出す
+    if (!st || !st.d) { vDur = 0; $("seekPct").textContent = !st ? "--:--" : st.t > 1e9 ? "ライブ " + new Date(st.t * 1000).toLocaleTimeString("ja-JP") : "ライブ " + fmt(st.t); return; }
     vDur = st.d;
     $("seek").value = (st.t / st.d * 100).toFixed(1);
     seekLabel();
