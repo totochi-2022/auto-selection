@@ -1526,7 +1526,8 @@ class App:
     def video(self, cmd):
         """テレビの手前の動画を操作する（F6＋キーと同じ。リモコンのブックマークのページの動画のボタン・シークバー）。
         手前が mpv なら IPC で、それ以外（Brave）なら拡張機能 tv-fullscreen に中継 tvfs で。cmd: back180〜fwd180・toggle・volup・voldown・pct:NN"""
-        if not (cmd in self.VIDEO_SEEK or cmd in ("toggle", "volup", "voldown") or re.fullmatch(r"pct:\d+(\.\d+)?", cmd)):
+        if not (cmd in self.VIDEO_SEEK or cmd in ("toggle", "volup", "voldown", "keyup", "keydown", "key0")
+                or re.fullmatch(r"pct:\d+(\.\d+)?", cmd)):
             return
         env = at.mpv_env()
         front = subprocess.run(["wlrctl", "toplevel", "list", "state:active"], capture_output=True, text=True,
@@ -1537,6 +1538,13 @@ class App:
                 self.mpv.command("show-progress")
             elif cmd == "toggle":
                 self.mpv.command("cycle", "pause")
+            elif cmd in ("keyup", "keydown", "key0"):  # カラオケのキー変え（mpv の rubberband、速さはそのまま）
+                self.karaoke_semi = 0 if cmd == "key0" else max(-12, min(12, getattr(self, "karaoke_semi", 0) + (1 if cmd == "keyup" else -1)))
+                self.mpv.command("af", "remove", "@karaoke")
+                if self.karaoke_semi:
+                    self.mpv.command("af", "add", f"@karaoke:rubberband=pitch-scale={2 ** (self.karaoke_semi / 12):.6f}")
+                k = self.karaoke_semi
+                self.mpv.command("show-text", f"🎤 キー {'＋' if k > 0 else '−' if k < 0 else '±'}{abs(k)}")
             elif cmd in ("volup", "voldown"):
                 with self.lock:
                     v = max(0, min(100, int(self.player["volume"]) + (10 if cmd == "volup" else -10)))
