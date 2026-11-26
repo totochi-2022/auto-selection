@@ -42,7 +42,7 @@
   .bm button.open { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--panel2)); }
   /* 1 つだけ開いているときは緑の色だけ（2 つ以上なら下の数の丸） */
   /* 同じサイトのタブが 2 つ以上：数を出す。「同じサイトのタブへ」で押すたびに順に回る */
-  .bm button.open[data-n]::after { content: attr(data-n); min-width: 1.6em; padding: 1px 6px; border-radius: 9px; text-align: center;
+  .bm button.open[data-n]::after { content: attr(data-n); margin-left: auto; flex: none; min-width: 1.6em; padding: 1px 6px; border-radius: 9px; text-align: center;
     font-size: 13px; font-weight: bold; background: var(--good); color: var(--panel2); }
   .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; margin-bottom: 8px; }
   .tabs button { padding: 10px 4px; font: inherit; border-radius: 10px; border: 1px solid var(--line);
