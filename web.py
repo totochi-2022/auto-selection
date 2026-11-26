@@ -1509,7 +1509,7 @@ class App:
     def jump(self, where, solo=False):
         """テレビの画面を 端末（ttyd のタブ）か 動画（mpv かプレーヤーのタブ）へ（F7＋T／F7＋M と同じ）。
         solo なら F7 と同じく、行き先以外の動画を一時停止・行き先で止めていたものは再開"""
-        arg = {"term": "ttyd", "video": "mpv"}.get(where)
+        arg = {"term": "ttyd", "video": "mpv", "browse": "brave"}.get(where)  # browse＝端末・プレーヤー以外で最後に見ていたタブ（F7 の「ブラウザ」）
         if not arg or not self.WIN_FOCUS.exists():
             return
         env = at.mpv_env()
