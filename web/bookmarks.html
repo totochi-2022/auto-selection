@@ -40,7 +40,7 @@
   .bm span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.3; }
   /* 同じサイトのタブがもうテレビの Brave にある（「同じサイトのタブへ」なら新しく開かずにそこへ飛ぶ） */
   .bm button.open { border-color: var(--good); background: color-mix(in srgb, var(--good) 22%, var(--panel2)); }
-  .bm button.open::after { content: "開いている"; margin-left: auto; flex: none; font-size: 11px; color: var(--good); }
+  /* 1 つだけ開いているときは緑の色だけ（2 つ以上なら下の数の丸） */
   /* 同じサイトのタブが 2 つ以上：数を出す。「同じサイトのタブへ」で押すたびに順に回る */
   .bm button.open[data-n]::after { content: attr(data-n); min-width: 1.6em; padding: 1px 6px; border-radius: 9px; text-align: center;
     font-size: 13px; font-weight: bold; background: var(--good); color: var(--panel2); }
