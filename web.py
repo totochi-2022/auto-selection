@@ -1544,7 +1544,8 @@ class App:
                 if self.karaoke_semi:
                     self.mpv.command("af", "add", f"@karaoke:rubberband=pitch-scale={2 ** (self.karaoke_semi / 12):.6f}")
                 k = self.karaoke_semi
-                self.mpv.command("show-text", f"🎤 キー {'＋' if k > 0 else '−' if k < 0 else '±'}{abs(k)}")
+                what = {"keyup": "▲ キーを半音上げる", "keydown": "▼ キーを半音下げる"}.get(cmd, "● キーを元に戻す")
+                self.mpv.command("show-text", f"🎤 {what}\n今のキー {'＋' if k > 0 else '−' if k < 0 else '±'}{abs(k)}{'' if k else '（元の高さ）'}", 2500)
             elif cmd in ("volup", "voldown"):
                 with self.lock:
                     v = max(0, min(100, int(self.player["volume"]) + (10 if cmd == "volup" else -10)))
